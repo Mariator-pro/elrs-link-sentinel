@@ -1,0 +1,23 @@
+# Lua compiled files
+*.luac
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code
+CLAUDE.md
+elrs_modes.md
