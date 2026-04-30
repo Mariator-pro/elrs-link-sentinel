@@ -10,8 +10,8 @@ With ELRS, the usable range depends heavily on the selected RF mode (packet rate
 
 `sntnl.lua` reads the receiver's telemetry values (RSSI of both antennas, link quality, current RF mode) and plays two graded warning tones:
 
-- **Link Warning** – Both antennas are close to the sensitivity limit of the current mode. *"Time to turn back toward the pilot."*
-- **Link Critical** – Both antennas weak **and** packets are starting to drop (RQly < 42 %). *"Come back now."*
+- **Link Warning** – The receiver's antenna(s) are close to the sensitivity limit of the current mode. On a dual-antenna receiver both antennas have to drop below the threshold; a single-antenna receiver is evaluated on its only RSSI value. *"Time to turn back toward the pilot."*
+- **Link Critical** – Same RSSI condition as above **and** packets are starting to drop (RQly < 42 %). *"Come back now."*
 
 If telemetry is lost completely, the script intentionally stays silent — EdgeTX itself already raises an alarm in that case.
 
@@ -19,7 +19,7 @@ If telemetry is lost completely, the script intentionally stays silent — EdgeT
 
 - A radio running EdgeTX
 - An ExpressLRS receiver running firmware 4.0 or newer with telemetry enabled
-- The following ELRS telemetry sensors must be discovered on the radio: `RFMD`, `1RSS`, `2RSS`, `RQly` (they appear automatically after a telemetry discovery)
+- The following ELRS telemetry sensors must be discovered on the radio: `RFMD`, `1RSS`, `RQly` and — on dual-antenna receivers — `2RSS` (they appear automatically after a telemetry discovery)
 
 ## Installation
 

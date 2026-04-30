@@ -123,7 +123,14 @@ local function run_func()
   local rss2 = getValue("2RSS")
   local rqly = getValue("RQly")
 
-  local stage1Cond = (rss1 <= warnThreshold) and (rss2 <= warnThreshold)
+  -- Single-antenna receivers (e.g. RP1) report 2RSS as a constant 0.
+  -- Treat 0 as "no second antenna" and base the decision on 1RSS only.
+  local stage1Cond
+  if rss2 ~= 0 then
+    stage1Cond = (rss1 <= warnThreshold) and (rss2 <= warnThreshold)
+  else
+    stage1Cond = (rss1 <= warnThreshold)
+  end
   local stage2Cond = stage1Cond and (rqly < RQLY_THRESHOLD)
 
   debounce(stage1, stage1Cond, now)
