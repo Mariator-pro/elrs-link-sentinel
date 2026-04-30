@@ -21,3 +21,11 @@ Desktop.ini
 # Claude Code
 CLAUDE.md
 elrs_modes.md
+
+# Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
