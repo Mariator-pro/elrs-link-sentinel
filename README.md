@@ -4,6 +4,16 @@
 
 A small EdgeTX Lua script that watches your ExpressLRS link in the background and audibly warns you **before** the connection breaks down.
 
+> ⚠️ **Work in progress**
+> First stable release coming soon.
+
+## Compatibility
+
+| Component | Minimum Version | Tested On | Test Hardware |
+|-----------|-----------------|-----------|---------------|
+| EdgeTX    | v2.10           | v2.12.0   | Radiomaster TX15, Radiomaster TX16S MK3 |
+| ExpressLRS| v4.0.0          | v4.0.0    | Radiomaster RP1 V2, RP3 V2, RP4TD |
+
 ## What is it for?
 
 With ELRS, the usable range depends heavily on the selected RF mode (packet rate). Each mode has its own receiver sensitivity limit. If you don't keep a constant eye on a live telemetry screen, you usually only notice a weakening link when it's already too late.
