@@ -10,9 +10,10 @@ local RQLY_THRESHOLD = 42     -- Lower RQly bound in % for stage 2
 local DEBOUNCE_MS    = 2000   -- Debounce time in ms
 local REPEAT_MS      = 5000   -- Sound repeat interval in ms
 
--- Sound files
-local STAGE1_WAV = "/SCRIPTS/FUNCTIONS/sntnl/stage1.wav"
-local STAGE2_WAV = "/SCRIPTS/FUNCTIONS/sntnl/stage2.wav"
+-- Sound files. Absolute paths bypass EdgeTX's per-language resolution so the
+-- same files play regardless of the radio's language setting.
+local STAGE1_WAV = "/SOUNDS/en/SCRIPTS/ELRS_LINK_SENTINEL/stage1.wav"
+local STAGE2_WAV = "/SOUNDS/en/SCRIPTS/ELRS_LINK_SENTINEL/stage2.wav"
 
 -- Sensitivity limits in dBm per RFMD (see elrs_modes.md).
 -- Entries with 0 dBm are intentional placeholders and produce a

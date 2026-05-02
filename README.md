@@ -40,13 +40,16 @@ Take the SD card out of the radio (or connect the radio via USB as mass storage)
 ```
 SCRIPTS/
 └── FUNCTIONS/
-    ├── sntnl.lua
-    └── sntnl/
-        ├── stage1.wav
-        └── stage2.wav
+    └── sntnl.lua
+SOUNDS/
+└── en/
+    └── SCRIPTS/
+        └── ELRS_LINK_SENTINEL/
+            ├── stage1.wav
+            └── stage2.wav
 ```
 
-All three files are available in the `SCRIPTS/FUNCTIONS/` folder of this repository — just copy them 1:1 to the same location on the SD card.
+All three files are available in the matching folders of this repository — just copy them 1:1 to the same locations on the SD card. The WAV files always live under `/SOUNDS/en/SCRIPTS/ELRS_LINK_SENTINEL/` regardless of the radio's language setting; `sntnl.lua` uses an absolute path to play them.
 
 ### 2. Set up a Special Function on the model
 
@@ -81,12 +84,12 @@ After saving, copy the file back to the SD card — no reboot needed; EdgeTX rel
 
 ### Replacing the warning sounds
 
-If you don't like the supplied tones, feel free to drop in your own audio files. Just keep the file names exactly as they are — `stage1.wav` for the warning and `stage2.wav` for the critical alert — and leave them in the `/SCRIPTS/FUNCTIONS/sntnl/` folder.
+If you don't like the supplied tones, feel free to drop in your own audio files. Just keep the file names exactly as they are — `stage1.wav` for the warning and `stage2.wav` for the critical alert — and leave them in the `/SOUNDS/en/SCRIPTS/ELRS_LINK_SENTINEL/` folder.
 
 ## Troubleshooting
 
 - **Script doesn't show up when picking it for the Special Function:** Check the file name — it must be exactly `sntnl.lua` (max. 6 characters, otherwise EdgeTX hides function scripts).
-- **No warning tone is ever played:** Make sure the WAV files really sit in `/SCRIPTS/FUNCTIONS/sntnl/` and not directly in the `FUNCTIONS` folder.
+- **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/ELRS_LINK_SENTINEL/` (the `en/` folder is mandatory even if your radio is set to another language).
 - **Permanent warning despite good reception:** Your ELRS setup is probably using a mode whose sensitivity limit isn't yet listed in the script. Please [open an issue](../../issues) so it can be added.
 
 ## Contributing
