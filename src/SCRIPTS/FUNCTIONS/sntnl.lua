@@ -5,10 +5,10 @@
 -- ============================================================
 
 -- Configurable parameters
-local WARN_OFFSET_DB = 10     -- Offset (dBm) added on top of the sensitivity limit
-local RQLY_THRESHOLD = 42     -- Lower RQly bound in % for stage 2
-local DEBOUNCE_MS    = 2000   -- Debounce time in ms
-local REPEAT_MS      = 5000   -- Sound repeat interval in ms
+local WARN_OFFSET_DB = 10     -- Offset (dBm) added on top of the sensitivity limit (default: 10)
+local RQLY_THRESHOLD = 42     -- Lower RQly bound in % for stage 2 (default: 42)
+local DEBOUNCE_MS    = 2000   -- Debounce time in ms (default: 2000)
+local REPEAT_MS      = 5000   -- Sound repeat interval in ms (default: 5000)
 
 -- Sound files. Absolute paths bypass EdgeTX's per-language resolution so the
 -- same files play regardless of the radio's language setting.
@@ -20,39 +20,39 @@ local STAGE2_WAV = "/SOUNDS/en/SCRIPTS/ELRS_LINK_SENTINEL/stage2.wav"
 -- permanent warning -- a hint that this mode still needs to be filled in.
 local SENS_LIMIT = {
   -- 900 MHz / Sub-GHz
-  [0]   = -123,
-  [1]   = -120,
-  [2]   = -117,
-  [3]   = -112,
-  [4]   = 0,
-  [5]   = -112,
-  [6]   = -111,
-  [7]   = -111,
-  [8]   = 0,
-  [9]   = 0,
-  [10]  = -112,
-  [11]  = -101,
+  [0]   = -123,  -- 25Hz
+  [1]   = -120,  -- 50Hz
+  [2]   = -117,  -- 100Hz
+  [3]   = -112,  -- 100Hz Full
+  [4]   = 0,     -- 150Hz
+  [5]   = -112,  -- 200Hz
+  [6]   = -111,  -- 200Hz Full
+  [7]   = -111,  -- 250Hz
+  [8]   = 0,     -- 333Hz Full
+  [9]   = 0,     -- 500Hz
+  [10]  = -112,  -- D50
+  [11]  = -101,  -- K1000 Full
   -- 2.4 GHz
-  [20]  = 0,
-  [21]  = -115,
-  [22]  = 0,
-  [23]  = -112,
-  [24]  = -112,
-  [25]  = 0,
-  [26]  = 0,
-  [27]  = -108,
-  [28]  = -105,
-  [29]  = -105,
-  [30]  = -104,
-  [31]  = -104,
-  [32]  = -104,
-  [33]  = -104,
-  [34]  = -103,
-  [35]  = -103,
-  [36]  = -103,
+  [20]  = 0,     -- 25Hz
+  [21]  = -115,  -- 50Hz
+  [22]  = 0,     -- 100Hz
+  [23]  = -112,  -- 100Hz Full
+  [24]  = -112,  -- 150Hz
+  [25]  = 0,     -- 200Hz
+  [26]  = 0,     -- 200Hz Full
+  [27]  = -108,  -- 250Hz
+  [28]  = -105,  -- 333Hz Full
+  [29]  = -105,  -- 500Hz
+  [30]  = -104,  -- D250
+  [31]  = -104,  -- D500
+  [32]  = -104,  -- F500
+  [33]  = -104,  -- F1000
+  [34]  = -103,  -- DK250
+  [35]  = -103,  -- DK500
+  [36]  = -103,  -- K1000
   -- GEMX / Crossband
-  [100] = -112,
-  [101] = -112,
+  [100] = -112,  -- X100Hz Full
+  [101] = -112,  -- X150Hz
 }
 
 -- Internal state
@@ -124,7 +124,7 @@ local function run_func()
   local rss2 = getValue("2RSS")
   local rqly = getValue("RQly")
 
-  -- Single-antenna receivers (e.g. RP1) report 2RSS as a constant 0.
+  -- Single-antenna receivers (e.g. Radiomaster RP1) report 2RSS as a constant 0.
   -- Treat 0 as "no second antenna" and base the decision on 1RSS only.
   local stage1Cond
   if rss2 ~= 0 then

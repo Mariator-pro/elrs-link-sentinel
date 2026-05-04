@@ -20,7 +20,9 @@ Desktop.ini
 
 # Claude Code
 CLAUDE.md
-elrs_modes.md
+
+# Folder
+Kontext/
 
 # Secrets
 .env
