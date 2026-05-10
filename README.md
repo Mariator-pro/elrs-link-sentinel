@@ -4,14 +4,39 @@
 
 A small EdgeTX Lua script that watches your ExpressLRS link in the background and audibly warns you **before** the connection breaks down.
 
-## Compatibility
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![EdgeTX](https://img.shields.io/badge/EdgeTX-%E2%89%A5%202.10-brightgreen)](https://edgetx.org)
+[![ExpressLRS](https://img.shields.io/badge/ExpressLRS-%E2%89%A5%204.0-orange)](https://www.expresslrs.org)
+[![GitHub issues](https://img.shields.io/github/issues/Mariator-pro/elrs-link-sentinel)](../../issues)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Mariator-pro/elrs-link-sentinel)](../../commits/main)
+
+---
+
+## 📑 Table of Contents
+
+- [📋 Compatibility](#-compatibility)
+- [🎯 What is it for?](#-what-is-it-for)
+- [🧰 Requirements](#-requirements)
+- [📥 Installation](#-installation)
+- [⚙️ Customizing](#️-customizing)
+- [🛠️ Troubleshooting](#️-troubleshooting)
+- [💡 Credits](#-credits)
+- [🤝 Contributing](#-contributing)
+- [⚠️ Disclaimer](#️-disclaimer)
+- [📄 License](#-license)
+
+---
+
+## 📋 Compatibility
 
 | Component | Minimum Version | Tested On | Test Hardware |
 |-----------|-----------------|-----------|---------------|
 | EdgeTX    | v2.10           | v2.12.0   | Radiomaster TX15, Radiomaster TX16S MK3 |
 | ExpressLRS| v4.0.0          | v4.0.0    | Radiomaster RP1 V2, RP3 V2, RP4TD |
 
-## What is it for?
+---
+
+## 🎯 What is it for?
 
 With ELRS, the usable range depends heavily on the selected RF mode (packet rate). Each mode has its own receiver sensitivity limit. If you don't keep a constant eye on a live telemetry screen, you usually only notice a weakening link when it's already too late.
 
@@ -24,13 +49,17 @@ If telemetry is lost completely, the script intentionally stays silent — EdgeT
 
 If telemetry is up but the required sensors (`1RSS`, `RQly`) never show up — typically because sensor discovery was skipped or the receiver's telemetry is configured non-standard — the script plays a separate **configuration-error tone** so you know it cannot warn you. The tone repeats every 30 seconds until the sensors appear.
 
-## Requirements
+---
+
+## 🧰 Requirements
 
 - A radio running EdgeTX
 - An ExpressLRS receiver running firmware 4.0 or newer with telemetry enabled
 - The following ELRS telemetry sensors must be discovered on the radio: `RFMD`, `1RSS`, `RQly` and — on dual-antenna receivers — `2RSS` (they appear automatically after a telemetry discovery)
 
-## Installation
+---
+
+## 📥 Installation
 
 ### 1. Copy the files to the SD card
 
@@ -69,7 +98,9 @@ All four files are available in the matching folders of this repository — just
 - When you intentionally weaken the link (e.g. move the model away, cover an antenna), the first warning tone should play after about 2 seconds and repeat every 5 seconds.
 - With a very weak link **and** packet loss the script automatically switches to the critical warning tone.
 
-## Customizing
+---
+
+## ⚙️ Customizing
 
 If you want to tweak the thresholds or timings, open `sntnl.lua` in a text editor. The first lines of the script define four constants:
 
@@ -86,20 +117,34 @@ After saving, copy the file back to the SD card — no reboot needed; EdgeTX rel
 
 If you don't like the supplied tones, feel free to drop in your own audio files. Just keep the file names exactly as they are — `stage1.wav` for the warning and `stage2.wav` for the critical alert — and leave them in the `/SOUNDS/en/SCRIPTS/SNTNL/` folder.
 
-## Troubleshooting
+---
+
+## 🛠️ Troubleshooting
 
 - **Script doesn't show up when picking it for the Special Function:** Check the file name — it must be exactly `sntnl.lua` (max. 6 characters, otherwise EdgeTX hides function scripts).
 - **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/SNTNL/` (the `en/` folder is mandatory even if your radio is set to another language).
 - **Permanent warning despite good reception:** Your ELRS setup is probably using a mode whose sensitivity limit isn't yet listed in the script. Please [open an issue](../../issues) so it can be added.
 
-## Contributing
+---
+
+## 💡 Credits
+
+The idea for this script comes from the RC Video Reviews YouTube video ["Express LRS Link Telemetry • How-to Setup Your Radio Correctly"](https://www.youtube.com/watch?v=sl68I-MoJ9Q).
+
+---
+
+## 🤝 Contributing
 
 Found a bug, have an idea for an improvement, or running an ELRS mode that isn't covered yet? Please [open an issue](../../issues) on GitHub. Pull requests are welcome too.
 
-## Disclaimer
+---
+
+## ⚠️ Disclaimer
 
 This script is provided **as is** and is intended as an additional aid only. It does **not** replace careful flying within visual range, your own judgement, or the safety mechanisms of your transmitter and receiver. Always be ready to react manually. Use at your own risk.
 
-## License
+---
+
+## 📄 License
 
 Released under the [MIT License](LICENSE).
