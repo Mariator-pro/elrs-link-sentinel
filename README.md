@@ -1,6 +1,6 @@
 # elrs-link-sentinel
 
-![elrs-link-sentinel — EdgeTX Lua script for early ExpressLRS audible warnings](docs/banner.jpg)
+![elrs-link-sentinel — EdgeTX Lua script for early ExpressLRS audible warnings](docs/banner.png)
 
 A small EdgeTX Lua script that watches your ExpressLRS link in the background and audibly warns you **before** the connection breaks down.
 
