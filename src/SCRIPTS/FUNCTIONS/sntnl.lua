@@ -1,23 +1,24 @@
--- ============================================================
--- elrs-link-sentinel (sntnl.lua)
--- EdgeTX function script that monitors the ELRS radio link.
--- Path on the SD card: /SCRIPTS/FUNCTIONS/sntnl.lua
---
+-- =====================================================================
+-- sntnl.lua  --  EdgeTX function script that monitors the ELRS radio link.
+-- =====================================================================
+-- SD card path: /SCRIPTS/FUNCTIONS/sntnl.lua
+-- =====================================================================
+-- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
 --
 -- This program is free software; you can redistribute it and/or modify
--- it under the terms of the GNU General Public License as published by
--- the Free Software Foundation; either version 2 of the License, or
--- (at your option) any later version.
+-- it under the terms of the GNU General Public License version 2 as
+-- published by the Free Software Foundation.
 --
 -- This program is distributed in the hope that it will be useful,
 -- but WITHOUT ANY WARRANTY; without even the implied warranty of
--- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 -- GNU General Public License for more details.
 --
 -- You should have received a copy of the GNU General Public License along
--- with this program; if not, see <https://www.gnu.org/licenses/gpl-2.0.html>.
--- ============================================================
+-- with this program; if not, write to the Free Software Foundation, Inc.,
+-- 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- =====================================================================
 
 -- Configurable parameters
 local WARN_OFFSET_DB    = 10     -- Offset (dBm) added on top of the sensitivity limit (default: 10)
