@@ -4,7 +4,7 @@
 
 A small EdgeTX Lua script that watches your ExpressLRS link in the background and audibly warns you **before** the connection breaks down.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![EdgeTX](https://img.shields.io/badge/EdgeTX-%E2%89%A5%202.10-brightgreen)](https://edgetx.org)
 [![ExpressLRS](https://img.shields.io/badge/ExpressLRS-%E2%89%A5%204.0-orange)](https://www.expresslrs.org)
 [![GitHub issues](https://img.shields.io/github/issues/Mariator-pro/elrs-link-sentinel)](../../issues)
@@ -131,6 +131,14 @@ If you don't like the supplied tones, feel free to drop in your own audio files.
 
 The idea for this script comes from the RC Video Reviews YouTube video ["Express LRS Link Telemetry • How-to Setup Your Radio Correctly"](https://www.youtube.com/watch?v=sl68I-MoJ9Q).
 
+The warning sounds (`stage1.wav`, `stage2.wav`, `cfgerr.wav`) are taken from the [EdgeTX](https://github.com/EdgeTX/edgetx) project (GPL-2.0) and were renamed for use by `sntnl.lua`:
+
+- `stage1.wav` — renamed from `rssi_org.wav`
+- `stage2.wav` — renamed from `rssi_red.wav`
+- `cfgerr.wav` — renamed from `warnng.wav`
+
+Copyright (C) the EdgeTX contributors.
+
 ---
 
 ## 🤝 Contributing
@@ -147,4 +155,4 @@ This script is provided **as is** and is intended as an additional aid only. It 
 
 ## 📄 License
 
-Released under the [MIT License](LICENSE).
+Released under the [GNU General Public License v2.0](LICENSE).
