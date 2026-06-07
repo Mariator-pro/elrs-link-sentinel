@@ -1,0 +1,648 @@
+-- =====================================================================
+-- main.lua  --  EdgeTX widget for the ELRS Link Sentinel.
+-- =====================================================================
+-- SD card path: /WIDGETS/SNTNL/main.lua
+-- =====================================================================
+-- SPDX-License-Identifier: GPL-2.0-only
+-- Copyright (C) 2026 Mariator-pro
+--
+-- This program is free software; you can redistribute it and/or modify
+-- it under the terms of the GNU General Public License version 2 as
+-- published by the Free Software Foundation.
+--
+-- This program is distributed in the hope that it will be useful,
+-- but WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-- GNU General Public License for more details.
+-- =====================================================================
+-- Requires the shared module /SCRIPTS/SNTNL/core.lua on the SD card: core
+-- reads telemetry, runs the warning logic and plays the sounds; this widget
+-- drives core from refresh()/background() and renders the result. The header
+-- (module + firmware) is read directly from the TX module over CRSF
+-- (device-info), independent of core; until the first reply it shows a
+-- "LINK-SENTINEL" placeholder.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- Responsive scaling (Designguide section 6): every pixel constant runs
+-- through sx(); positions scale with S, fonts are fixed EdgeTX stages.
+-- ---------------------------------------------------------------------
+local S = (LCD_W or 480) / 480
+local function sx(v) return math.floor(v * S + 0.5) end
+
+-- ---------------------------------------------------------------------
+-- Shared core module. Loaded once here (module level) for all instances. If
+-- it cannot be loaded, refresh() shows a "Core missing" tile instead.
+-- ---------------------------------------------------------------------
+local CORE_PATH = "/SCRIPTS/SNTNL/core.lua"
+local core
+do
+  local chunk = loadScript(CORE_PATH)
+  if chunk then
+    local ok, mod = pcall(chunk)
+    if ok then core = mod end
+  end
+end
+
+-- Tick throttle so the warning cadence is the same whether driven by the
+-- ~20 Hz refresh() or the slower background(); fault counter trips a tile.
+local TICK_INTERVAL = 10   -- 0.1 s (getTime units)
+local ERROR_LIMIT   = 5
+
+-- Range-bar smoothing steps (see smoothRange).
+local RANGE_STEP_SMALL = 1
+local RANGE_STEP_BIG   = 4
+local RANGE_JUMP       = 8
+
+-- Show the NO LINK tile only after the link has been gone this long; brief
+-- dropouts keep the last good tile instead of flickering to NO LINK.
+local NO_LINK_DEBOUNCE = 150   -- getTime ticks (1.5 s)
+
+-- ---------------------------------------------------------------------
+-- Color palettes (Designguide section 2). Set per frame from the Theme
+-- option. Escalation colors are theme-independent.
+-- ---------------------------------------------------------------------
+local DARK = {
+  transparent = false,
+  panel  = lcd.RGB( 18,  20,  18),
+  fg     = lcd.RGB(235, 235, 235),
+  muted  = lcd.RGB(150, 150, 150),
+  track  = lcd.RGB( 55,  58,  55),
+  accent = lcd.RGB(124, 210,  48),
+}
+local LIGHT = {
+  transparent = true,
+  panel  = nil,
+  fg     = lcd.RGB(  0,   0,   0),
+  muted  = lcd.RGB( 90,  90,  90),
+  track  = lcd.RGB(200, 200, 205),
+  accent = lcd.RGB(  1, 152,   8),
+}
+local WARN_COL = lcd.RGB(255, 180,   0)  -- yellow / Stage 1
+local CRIT_COL = lcd.RGB(220,  40,  40)  -- red    / Stage 2
+local ON_DARK  = lcd.RGB(245, 245, 245)  -- text on the red status bar
+
+-- Mascot-eye colours, theme-independent (light eyeball, dark rim/pupil).
+local EYE_WHITE = lcd.RGB(245, 245, 245)
+local EYE_RIM   = lcd.RGB( 20,  20,  20)
+
+-- Active palette. Safe as a module global: refresh() is the only draw
+-- path and only one instance runs at a time (Designguide section 4).
+local COLORS = DARK
+
+-- ---------------------------------------------------------------------
+-- Widget options (EdgeTX limits: name <= 10 chars, no spaces, <=5 on 2.10)
+-- ---------------------------------------------------------------------
+local options = {
+  { "Theme",  CHOICE, 1, { "Dark", "Light" } },  -- 1=Dark, 2=Light (EdgeTX 2.11+)
+  { "Transp", VALUE,  2, 0, 5 },                  -- milky overlay, Light only
+}
+
+-- ---------------------------------------------------------------------
+-- Text helper: custom color via CUSTOM_COLOR so a raw RGB never collides
+-- with the size/attribute bits in the flags (Designguide section 10).
+-- flags = only size / align / BOLD.
+-- ---------------------------------------------------------------------
+local function dtext(x, y, text, color, flags)
+  lcd.setColor(CUSTOM_COLOR, color)
+  lcd.drawText(x, y, text, CUSTOM_COLOR + (flags or 0))
+end
+
+-- Font stages, largest -> smallest (Designguide section 5).
+local FONT_STEPS = { XXLSIZE, DBLSIZE, MIDSIZE, 0, SMLSIZE }
+local SMALLER    = { [XXLSIZE] = DBLSIZE, [DBLSIZE] = MIDSIZE,
+                     [MIDSIZE] = 0, [0] = SMLSIZE, [SMLSIZE] = SMLSIZE }
+
+-- Largest font whose text fits in maxW x maxH. Dimension big numbers from
+-- a fixed reference string so "1%" never gets a bigger font than "100%".
+local function fitFont(text, maxW, maxH, extra)
+  extra = extra or 0
+  for _, f in ipairs(FONT_STEPS) do
+    local w, h = lcd.sizeText(text, f + extra)
+    if w <= maxW and (not maxH or h <= maxH) then return f end
+  end
+  return SMLSIZE
+end
+
+-- Vertical-center offset for a row, measured against a reference glyph.
+local function vcenter(ry, rh, flags)
+  local _, th = lcd.sizeText("0", flags or 0)
+  return ry + math.floor((rh - th) / 2)
+end
+
+-- Draw a sequence of {text,color[,flags]} segments left to right; returns
+-- width. A segment may override the row flags (e.g. BOLD for emphasis).
+local function drawSegs(x, y, segs, flags)
+  local cx = x
+  for _, s in ipairs(segs) do
+    local f = s.flags or flags or 0
+    dtext(cx, y, s.text, s.color, f)
+    cx = cx + lcd.sizeText(s.text, f)
+  end
+  return cx - x
+end
+
+-- Total pixel width of a segment list (for right-aligned placement).
+local function segsWidth(segs, flags)
+  local w = 0
+  for _, s in ipairs(segs) do w = w + lcd.sizeText(s.text, s.flags or flags or 0) end
+  return w
+end
+
+-- BOLD works for every font EXCEPT the small one: SMLSIZE + BOLD makes EdgeTX
+-- jump to the max font. So apply BOLD everywhere except SMLSIZE.
+local function bold(flag)
+  if flag == SMLSIZE then return 0 end
+  return BOLD
+end
+
+-- Fill color for the current stage (Designguide: accent -> yellow -> red).
+local function stageColor(stage)
+  if stage >= 2 then return CRIT_COL end
+  if stage >= 1 then return WARN_COL end
+  return COLORS.accent
+end
+
+-- Colour for the status word where it sits ON the stage-coloured fill: light on
+-- the red fill, near-black on the lime/yellow fill.
+local function textOnStage(stage)
+  if stage >= 2 then return ON_DARK end
+  return DARK.panel  -- near-black reads well on lime/yellow
+end
+
+-- Draw `text` two-tone: each glyph uses `onFill` left of the bar's fill edge,
+-- `onTrack` beyond it -- so the status word reads on both fill and empty track.
+local function drawSplitText(x, y, text, flags, fillRight, onFill, onTrack)
+  local cx = x
+  for i = 1, #text do
+    local ch = string.sub(text, i, i)
+    local cw = lcd.sizeText(ch, flags)
+    local col = (cx + cw / 2 <= fillRight) and onFill or onTrack
+    dtext(cx, y, ch, col, flags)
+    cx = cx + cw
+  end
+end
+
+-- ---------------------------------------------------------------------
+-- Display derivation (Widget-only). Picks values from core's result for the
+-- running tile. The active-antenna RSS selection lives HERE (display logic);
+-- core's warning decision does not use ANT.
+--   stage : 0 = OK, 1 = WARNING, 2 = CRITICAL
+-- ---------------------------------------------------------------------
+local function buildDisplay(ctx, r)
+  local snap = r.snapshot
+  local ant  = snap.ant                              -- 0/1, or nil (no ANT sensor)
+  return {
+    stage     = r.stage,
+    rfmode    = r.modeName or tostring(snap.rfmd),    -- raw number if name unknown
+    sensLimit = r.sensLimit,
+    rssActive = (ant == 1) and snap.rss2 or snap.rss1,  -- dBm readout: active antenna
+    linkRssi  = r.linkRssi,                              -- range bar: governing (stronger) antenna
+    antNum    = (ant == 1) and 2 or 1,
+    tpwr      = snap.tpwr,                            -- nil -> "--"
+    fm        = snap.fm,                              -- nil -> "--"
+    rqly      = snap.rqly,
+    module    = ctx.module,                           -- CRSF device-info (nil until detected)
+    fw        = ctx.fw,
+  }
+end
+
+-- Range budget in % (0..100) from linkRssi against the mode's raw sensitivity
+-- limit. nil for a placeholder/unknown mode (sensLimit == 0) -> bar full + "--".
+local function rangeTarget(rss, sensLimit)
+  if not sensLimit or sensLimit == 0 then return nil end
+  local pct = 100 * (rss + 50) / (sensLimit + 50)
+  if pct < 0 then return 0 elseif pct > 100 then return 100 end
+  return pct
+end
+
+-- Anti-flicker smoothing, refresh-paced (Designguide): +-1%/frame, +-4% when far
+-- (>8%). Snaps on the first frame; the caller resets it on link loss.
+local function smoothRange(ctx, target)
+  if target == nil then return end
+  if ctx.rangeSmoothed == nil then
+    ctx.rangeSmoothed = target
+    return
+  end
+  local diff = target - ctx.rangeSmoothed
+  local step = (math.abs(diff) > RANGE_JUMP) and RANGE_STEP_BIG or RANGE_STEP_SMALL
+  if diff > 0 then
+    ctx.rangeSmoothed = math.min(target, ctx.rangeSmoothed + step)
+  elseif diff < 0 then
+    ctx.rangeSmoothed = math.max(target, ctx.rangeSmoothed - step)
+  end
+end
+
+-- ---------------------------------------------------------------------
+-- CRSF device-info (Widget-only, cosmetic header: module name + firmware).
+-- Standard CRSF exchange: send a "ping devices" frame, receive a
+-- "device info" frame from the TX module. Frame types / addresses / payload
+-- layout are fixed by the CRSF protocol. Result lives on ctx (per instance).
+-- ---------------------------------------------------------------------
+local CRSF_PING        = 0x28   -- ping devices (request)
+local CRSF_DEVICE_INFO = 0x29   -- device info (reply)
+local ADDR_BROADCAST   = 0x00
+local ADDR_RADIO       = 0xEA   -- the handset
+local ADDR_TX_MODULE   = 0xEE   -- the ELRS TX module (only sender we accept)
+local DEV_PING_PERIOD  = 100    -- getTime ticks (1 s) between active pings
+
+-- Read a null-terminated CRSF string from byte array `b` starting at index
+-- `from`. Returns the decoded string and the index just past the terminator.
+local function crsfReadString(b, from)
+  local out, i = {}, from
+  while b[i] and b[i] ~= 0 do
+    out[#out + 1] = string.char(b[i])
+    i = i + 1
+  end
+  return table.concat(out), i + 1
+end
+
+-- Decode a device-info payload into ctx.module / ctx.fw. Accept only frames
+-- from the TX module; everything else (e.g. a receiver) is ignored.
+local function parseDeviceInfo(ctx, b)
+  if not b or b[2] ~= ADDR_TX_MODULE then return end
+  local name, p = crsfReadString(b, 3)
+  -- payload after the name: serial(4) + hardware(4) + software(4); the
+  -- firmware version is the last three bytes of the software field.
+  local maj, min, rev = b[p + 9], b[p + 10], b[p + 11]
+  if name ~= "" and maj and min and rev then
+    ctx.module = name
+    ctx.fw     = string.format("%d.%d.%d", maj, min, rev)
+  end
+end
+
+-- Drain one incoming CRSF frame; while the module is still unknown, actively
+-- ping once per second. Once known we stop pinging -- EdgeTX keeps polling, so
+-- a module swap is still picked up.
+local function pollDeviceInfo(ctx)
+  if not crossfireTelemetryPop then return end   -- no CRSF on this radio
+  local cmd, data = crossfireTelemetryPop()
+  if cmd == CRSF_DEVICE_INFO then
+    parseDeviceInfo(ctx, data)
+  end
+  if not ctx.module then
+    local now = getTime()
+    if now - (ctx.lastDevPing or 0) > DEV_PING_PERIOD then
+      crossfireTelemetryPush(CRSF_PING, { ADDR_BROADCAST, ADDR_RADIO })
+      ctx.lastDevPing = now
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------
+-- Drawing
+-- ---------------------------------------------------------------------
+
+-- Brand-style header: accent square + accent SMLSIZE label. Returns its height.
+local function drawHeader(x, y, label)
+  local hdrH = select(2, lcd.sizeText("0", SMLSIZE)) + sx(2)
+  local sq   = sx(6)
+  lcd.drawFilledRectangle(x, y + math.floor((hdrH - sq) / 2), sq, sq, COLORS.accent)
+  dtext(x + sq + sx(3), vcenter(y, hdrH, SMLSIZE), label, COLORS.accent, SMLSIZE)
+  return hdrH
+end
+
+-- Animated "No RX connected" with 0-3 building dots; centered as if all three
+-- dots were present so the base text never shifts.
+local NO_RX_BASE = "No RX connected"
+local DOT_PERIOD = 50   -- getTime ticks per dot (~0.5 s)
+local function drawNoRxStatus(cx, y)
+  local n      = math.floor(getTime() / DOT_PERIOD) % 4
+  local baseW  = lcd.sizeText(NO_RX_BASE, SMLSIZE)
+  local fullW  = lcd.sizeText(NO_RX_BASE .. "...", SMLSIZE)
+  local startX = cx - math.floor(fullW / 2)
+  dtext(startX, y, NO_RX_BASE, COLORS.muted, SMLSIZE)
+  if n > 0 then dtext(startX + baseW, y, string.rep(".", n), COLORS.muted, SMLSIZE) end
+end
+
+-- Blinking red dot, top-right (0.5 Hz), shown while telemetry is arriving -- a
+-- live "fresh packets + script running" sign that stops the instant packets do.
+local HEARTBEAT_HALF = 100   -- getTime ticks: 1 s on / 1 s off
+local function drawHeartbeat(ctx)
+  if math.floor(getTime() / HEARTBEAT_HALF) % 2 ~= 0 then return end
+  local z = ctx.zone
+  local r = sx(3)
+  lcd.drawFilledCircle(z.w - sx(4) - r, sx(4) + r, r, CRIT_COL)
+end
+
+-- NO LINK tile: brand "LINK-SENTINEL" in accent over an animated status line,
+-- and the TX module/FW (when known) as a small muted line below -- it comes from
+-- the module, so it is available even without an RX link.
+local function drawNoLink(ctx, x0, y0, W, H)
+  local title   = "LINK-SENTINEL"
+  local tFlag   = SMALLER[fitFont(title, W * 0.95, H * 0.5)]
+  local _, tH   = lcd.sizeText(title, tFlag)
+  local _, sH   = lcd.sizeText(NO_RX_BASE, SMLSIZE)
+  local gap     = sx(4)
+  local modLine = ctx.module and (ctx.module .. " (v" .. ctx.fw .. ")") or nil
+  local modH    = modLine and (sx(2) + sH) or 0
+
+  local by = y0 + math.floor((H - (tH + gap + sH + modH)) / 2)
+  local cx = x0 + math.floor(W / 2)
+  dtext(cx, by, title, COLORS.accent, tFlag + CENTER)
+  drawNoRxStatus(cx, by + tH + gap)
+  if modLine then
+    dtext(cx, by + tH + gap + sH + sx(2), modLine, COLORS.muted, SMLSIZE + CENTER)
+  end
+end
+
+-- Vertically + horizontally centered SMLSIZE lines. Status / error tiles.
+local function drawCenteredLines(z, lines, color)
+  color = color or COLORS.fg
+  local _, th  = lcd.sizeText("0", SMLSIZE)
+  local lineH  = th + sx(3)
+  local startY = math.floor((z.h - #lines * lineH) / 2)
+  for i, t in ipairs(lines) do
+    local tw = lcd.sizeText(t, SMLSIZE)
+    dtext(math.floor((z.w - tw) / 2), startY + (i - 1) * lineH, t, color, SMLSIZE)
+  end
+end
+
+-- Googly eyes: pupils drift and blink. Box (x,y,w,h) sits beside the brand.
+local function drawMascotEyes(x, y, w, h)
+  local t     = getTime()
+  local r     = math.max(sx(3), math.floor(h * 0.30))
+  local cy    = y + math.floor(h / 2)
+  local cx1   = x + r
+  local cx2   = cx1 + 2 * r + sx(2)
+  local blink = (t % 250) < 25
+  local ph    = (t % 180) / 180 * 2 * math.pi
+  local dx    = math.floor(math.cos(ph) * r * 0.4)
+  local dy    = math.floor(math.sin(ph) * r * 0.4)
+  for _, cx in ipairs({ cx1, cx2 }) do
+    lcd.drawFilledCircle(cx, cy, r, EYE_RIM)             -- dunkler Rand (auf jedem Grund sichtbar)
+    lcd.drawFilledCircle(cx, cy, r - 1, EYE_WHITE)       -- heller Augapfel
+    if blink then
+      lcd.drawFilledRectangle(cx - r, cy - sx(1), 2 * r, math.max(2, sx(2)), EYE_RIM)
+    else
+      lcd.drawFilledCircle(cx + dx, cy + dy, math.max(1, math.floor(r * 0.5)), EYE_RIM)
+    end
+  end
+end
+
+-- Brand heading with the eyes beside it (eyes dropped if the zone is too narrow).
+local function drawBrandHeading(z)
+  local pad = sx(4)
+  dtext(pad, pad, "LINK-SENTINEL", COLORS.accent, SMLSIZE)
+  local hw, hh   = lcd.sizeText("LINK-SENTINEL", SMLSIZE)
+  local eyeX, eyeW = pad + hw + sx(6), sx(20)
+  if eyeX + eyeW <= z.w then
+    drawMascotEyes(eyeX, pad, eyeW, math.max(hh, sx(14)))
+  end
+end
+
+-- Error/info tile: brand heading + eyes, then problem / next-step lines.
+local function drawErrorTile(z, line1, line2)
+  drawBrandHeading(z)
+  drawCenteredLines(z, { line1, line2 })
+end
+
+local function drawMain(z, W, H, x0, y0, d)
+  local sc = stageColor(d.stage)
+
+  -- Header: accent square + module/FW (brand placeholder until CRSF device-info).
+  local hdrLabel = d.module and (d.module .. " (v" .. d.fw .. ")") or "LINK-SENTINEL"
+  local hdrH     = drawHeader(x0, y0, hdrLabel)
+
+  -- Layout for the area below the header: range block / 2 info rows.
+  local top      = y0 + hdrH + sx(1)
+  local rest     = (y0 + H) - top
+  local hInfoRow = math.floor(rest * 0.20)
+  local hInfo    = hInfoRow * 2
+  local hRange   = rest - hInfo
+
+  -- ===== RANGE BLOCK =====
+  -- taller bar so the status word fits inside it
+  local barH    = math.max(sx(12), math.floor(hRange * 0.42))
+  local barY    = top + hRange - barH
+  local bandBot = barY - sx(1)
+  local bandH   = bandBot - top
+
+  -- Big percent, LEFT, value + smaller unit. Capped at the standard big-value
+  -- font (DBLSIZE) so it matches the voltage-style readout, shrunk only if it
+  -- would not fit the band; sized from a fixed "100" reference so "1%" never
+  -- dwarfs "100%". No BOLD -- DBLSIZE already reads as the heavy value font.
+  -- d.range is nil for a placeholder/unknown mode (sensLimit == 0): show "--"
+  -- and a full bar in the warning colour (decision A).
+  local unknownMode = (d.range == nil)
+  local pctTxt   = unknownMode and "--" or tostring(math.floor(d.range + 0.5))
+  local numFlag  = DBLSIZE
+  while numFlag ~= SMLSIZE and
+        (lcd.sizeText("100", numFlag) > W * 0.5 or
+         select(2, lcd.sizeText("100", numFlag)) > bandH) do
+    numFlag = SMALLER[numFlag]
+  end
+  local unitFlag = SMALLER[numFlag]
+  local nW, nH   = lcd.sizeText(pctTxt, numFlag)
+  local uW, uH   = lcd.sizeText("%", unitFlag)
+  local uGap     = sx(3)   -- space between value and unit
+  -- Percent colored by stage (same as the bar fill): green / yellow / red.
+  dtext(x0, bandBot - nH, pctTxt, sc, numFlag)
+  dtext(x0 + nW + uGap, bandBot - uH, "%", sc, unitFlag)
+
+  -- On the percent baseline (small font): "RANGE" right after the percent,
+  -- and "MODE <rfmode>" right-aligned to the band's right edge.
+  local capH = select(2, lcd.sizeText("RANGE", SMLSIZE))
+  local capY = bandBot - capH
+  -- MODE is the priority on this row and stays right-aligned. The RANGELIMIT
+  -- label degrades to "RANGE" and then disappears when the percent grows to
+  -- three digits and the row gets tight (e.g. 100% on a 480px TX15), so it
+  -- never collides with MODE.
+  local modeSegs = {
+    { text = "MODE ",  color = COLORS.muted },
+    { text = d.rfmode, color = COLORS.fg },
+  }
+  local modeX  = (x0 + W) - segsWidth(modeSegs, SMLSIZE)
+  drawSegs(modeX, capY, modeSegs, SMLSIZE)
+  local labelX = x0 + nW + uGap + uW + sx(6)
+  local avail  = modeX - sx(4) - labelX
+  local lbl    = "RANGELIMIT"
+  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = "RANGE" end
+  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = nil end
+  if lbl then dtext(labelX, capY, lbl, COLORS.muted, SMLSIZE) end
+
+  -- fill bar: length = range %, color = stage
+  lcd.drawFilledRectangle(x0, barY, W, barH, COLORS.track)
+  local p     = unknownMode and 100 or math.min(100, math.max(0, d.range))
+  local fillW = math.floor(W * p / 100)
+  lcd.drawFilledRectangle(x0, barY, fillW, barH, sc)
+  -- status word inside the bar, two-tone (see drawSplitText)
+  local statusTxt = (d.stage >= 2 and "CRITICAL")
+                 or (d.stage >= 1 and "WARNING") or "OK"
+  local stFlag = fitFont(statusTxt, W * 0.6, barH - sx(2))
+  drawSplitText(x0 + sx(4), vcenter(barY, barH, stFlag), statusTxt,
+                stFlag + bold(stFlag), x0 + fillW, textOnStage(d.stage), COLORS.fg)
+
+  -- ===== INFO GRID (2 rows x 3 cols) =====
+  -- col1: RSS(active) / ANT   col2: TX / FM   col3: LQ / mini bar
+  local gy   = top + hRange
+  -- Column x-positions sized to the widest content (worst case "RSS -000dBm"
+  -- and "TX 0000mW" at 1000 mW) so values never collide. Col 3 takes the rest.
+  local gap  = sx(8)
+  local c1x  = x0
+  local c2x  = c1x + lcd.sizeText("RSS -000 dBm", SMLSIZE) + gap
+  local c3x  = c2x + lcd.sizeText("TX 0000 mW", SMLSIZE) + gap
+  local col3 = (x0 + W) - c3x
+  local r1y = vcenter(gy, hInfoRow, SMLSIZE)
+  local r2y = vcenter(gy + hInfoRow, hInfoRow, SMLSIZE)
+
+  -- Col 1: RSS of the ACTIVE antenna (row 1) / active antenna number (row 2).
+  drawSegs(c1x, r1y, {
+    { text = "RSS ",                color = COLORS.muted },
+    { text = tostring(d.rssActive), color = COLORS.fg },
+    { text = " dBm",                color = COLORS.fg },
+  }, SMLSIZE)
+  drawSegs(c1x, r2y, {
+    { text = "ANT ",             color = COLORS.muted },
+    { text = tostring(d.antNum), color = COLORS.fg },
+  }, SMLSIZE)
+
+  -- Col 2: TX power (row 1) / FC flight mode (row 2)
+  drawSegs(c2x, r1y, {
+    { text = "TX ", color = COLORS.muted },
+    { text = d.tpwr and (d.tpwr .. " mW") or "--", color = COLORS.fg },
+  }, SMLSIZE)
+  drawSegs(c2x, r2y, {
+    { text = "FM ",        color = COLORS.muted },
+    { text = d.fm or "--", color = COLORS.fg },
+  }, SMLSIZE)
+
+  -- Col 3: LQ number (row 1) / mini bar (row 2), bar color by quality
+  drawSegs(c3x, r1y, {
+    { text = "LQ ",          color = COLORS.muted },
+    { text = d.rqly .. " %", color = COLORS.fg },
+  }, SMLSIZE)
+  local mbH = sx(6)
+  local mbY = (gy + hInfoRow) + math.floor((hInfoRow - mbH) / 2)
+  local mbW = col3 - sx(2)
+  lcd.drawFilledRectangle(c3x, mbY, mbW, mbH, COLORS.track)
+  local rq     = math.min(100, math.max(0, d.rqly))
+  local critLQ = core.PARAMS.RQLY_THRESHOLD       -- shared threshold, not hard-coded
+  local rqCol  = (rq >= 50 and COLORS.accent) or (rq >= critLQ and WARN_COL) or CRIT_COL
+  lcd.drawFilledRectangle(c3x, mbY, math.floor(mbW * rq / 100), mbH, rqCol)
+end
+
+-- ---------------------------------------------------------------------
+-- Widget lifecycle
+-- ---------------------------------------------------------------------
+local function create(zone, opts)
+  local ctx = {
+    zone = zone, options = opts,
+    lastTick = 0, errorStreak = 0, fatalError = false,
+    rangeSmoothed = nil, result = nil, lastRunning = nil, linkLostSince = nil,
+  }
+  if core then ctx.state = core.newState() end
+  return ctx
+end
+
+local function update(ctx, opts)
+  ctx.options = opts
+end
+
+-- One throttled, fault-tolerant data cycle (no lcd.*). Called from BOTH
+-- background() and refresh(): background() only runs while the widget is
+-- off-screen, so refresh() must drive it too or the tile freezes. Throttled so
+-- the cadence is caller-independent; repeated failures trip a terminal tile.
+local function tick(ctx)
+  if not core or ctx.fatalError then return end
+  local now = getTime()
+  if ctx.lastTick ~= 0 and (now - ctx.lastTick) < TICK_INTERVAL then return end
+  ctx.lastTick = now
+  pcall(pollDeviceInfo, ctx)   -- cosmetic header; isolated so CRSF never breaks the tick
+  local ok, res = pcall(core.update, ctx.state)
+  if ok then
+    ctx.result      = res
+    if res.status == "running" then ctx.lastRunning = res end  -- held during a brief dropout
+    ctx.errorStreak = 0
+  else
+    ctx.errorStreak = ctx.errorStreak + 1
+    if ctx.errorStreak >= ERROR_LIMIT then ctx.fatalError = true end
+  end
+end
+
+local function background(ctx)
+  tick(ctx)
+end
+
+local function refresh(ctx, event, touchState)
+  tick(ctx)   -- drive logic in the foreground too (background() won't run then)
+
+  local z = ctx.zone
+  COLORS = (ctx.options.Theme == 2) and LIGHT or DARK
+
+  -- Background per theme (Designguide section 3).
+  if not COLORS.transparent then
+    lcd.drawFilledRectangle(0, 0, z.w, z.h, COLORS.panel)
+  else
+    local trans = ctx.options.Transp or 0
+    if trans > 0 then
+      lcd.drawFilledRectangle(0, 0, z.w, z.h, COLOR_THEME_PRIMARY2, 3 * trans)
+    end
+  end
+
+  -- Whole render is fault-tolerant so a draw error never crashes EdgeTX.
+  local ok = pcall(function()
+    local pad = sx(3)
+    local x0, y0 = pad, pad
+    local W, H   = z.w - 2 * pad, z.h - 2 * pad
+
+    if not core then
+      drawErrorTile(z, "Core missing", "Reinstall SNTNL")
+      return
+    end
+    if ctx.fatalError then
+      drawErrorTile(z, "Widget error", "Re-add or restart")
+      return
+    end
+
+    local r = ctx.result
+    if not r then
+      drawCenteredLines(z, { "Starting..." })
+      return
+    end
+    -- NO LINK is debounced: hold the last good tile through a brief dropout, and
+    -- only fall through to the NO LINK screen once the loss persists.
+    if r.status == "no_link" then
+      ctx.linkLostSince = ctx.linkLostSince or getTime()
+      if ctx.lastRunning and (getTime() - ctx.linkLostSince) < NO_LINK_DEBOUNCE then
+        r = ctx.lastRunning
+      else
+        ctx.rangeSmoothed = nil   -- reset smoothing so the next connect snaps fresh
+        drawNoLink(ctx, x0, y0, W, H)
+        return
+      end
+    else
+      ctx.linkLostSince = nil
+    end
+
+    if r.status == "cfg_error" then
+      drawErrorTile(z, "Sensor missing", "Discover in EdgeTX")
+      return
+    end
+
+    -- running (live or held): derive display values, smooth the range bar, draw.
+    local d      = buildDisplay(ctx, r)
+    local target = rangeTarget(d.linkRssi, d.sensLimit)
+    smoothRange(ctx, target)
+    d.range = (target == nil) and nil or ctx.rangeSmoothed
+    drawMain(z, W, H, x0, y0, d)
+  end)
+  if not ok then
+    dtext(4, 4, "Widget error", COLORS.muted, SMLSIZE)
+  end
+
+  -- Heartbeat: blink top-right while telemetry is actually arriving (not during
+  -- a held dropout or NO LINK).
+  if ok and core and not ctx.fatalError and ctx.result and ctx.result.status ~= "no_link" then
+    pcall(drawHeartbeat, ctx)
+  end
+end
+
+return {
+  name       = "Sentinel",
+  options    = options,
+  create     = create,
+  update     = update,
+  refresh    = refresh,
+  background = background,
+}

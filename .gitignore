@@ -20,9 +20,11 @@ Desktop.ini
 
 # Claude Code
 CLAUDE.md
+.claude
 
 # Folder
 Kontext/
+tests/
 
 # Secrets
 .env
@@ -31,3 +33,7 @@ Kontext/
 *.pem
 *.key
 secrets.json.venv/
+
+# Edgetx simulator
+src/MODELS
+src/RADIO
