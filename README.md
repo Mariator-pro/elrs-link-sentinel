@@ -2,7 +2,7 @@
 
 ![elrs-link-sentinel: EdgeTX Lua script for early ExpressLRS audible warnings](docs/banner.png)
 
-A small EdgeTX Lua script that watches your ExpressLRS link in the background and audibly warns you **before** the connection breaks down.
+A small EdgeTX project that watches your ExpressLRS link in the background and audibly warns you **before** the connection breaks down. It ships in two interchangeable flavors: a tiny **function script** (audio only) and a **color widget** (the same audio warnings *plus* a live link display).
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 [![EdgeTX](https://img.shields.io/badge/EdgeTX-%E2%89%A5%202.10-brightgreen)](https://edgetx.org)
@@ -16,6 +16,7 @@ A small EdgeTX Lua script that watches your ExpressLRS link in the background an
 
 - [📋 Compatibility](#-compatibility)
 - [🎯 What is it for?](#-what-is-it-for)
+- [🧩 Script variants](#-script-variants)
 - [🧰 Requirements](#-requirements)
 - [📥 Installation](#-installation)
 - [⚙️ Customizing](#️-customizing)
@@ -40,22 +41,42 @@ A small EdgeTX Lua script that watches your ExpressLRS link in the background an
 
 With ELRS, the usable range depends heavily on the selected RF mode (packet rate). Each mode has its own receiver sensitivity limit. If you don't keep a constant eye on a live telemetry screen, you usually only notice a weakening link when it's already too late.
 
-`sntnl.lua` reads the receiver's telemetry values (RSSI of both antennas, link quality, current RF mode) and plays two graded warning tones:
+The sentinel reads the receiver's telemetry values (RSSI of both antennas, link quality, current RF mode) and plays two graded warning tones:
 
-- **Link Warning:** The receiver's antenna(s) are close to the sensitivity limit of the current mode. On a dual-antenna receiver both antennas have to drop below the threshold; a single-antenna receiver is evaluated on its only RSSI value. *"Time to turn back toward the pilot."*
-- **Link Critical:** Same RSSI condition as above **and** packets are starting to drop (RQly < 42 %). *"Come back now."*
+- **Link Warning:** The antenna(s) are near the current mode's sensitivity limit. *"Time to turn back toward the pilot."*
+- **Link Critical:** Same condition, plus packets starting to drop (RQly < 42 %). *"Come back now."*
 
-If telemetry is lost completely, the script intentionally stays silent, because EdgeTX itself already raises an alarm in that case.
+If telemetry is lost completely, the sentinel intentionally stays silent, because EdgeTX itself already raises an alarm in that case.
 
-If telemetry is up but the required sensors (`1RSS`, `RQly`) never show up (typically because sensor discovery was skipped or the receiver's telemetry is configured non-standard), the script plays a separate **configuration-error tone** so you know it cannot warn you. The tone repeats every 30 seconds until the sensors appear.
+If telemetry is up but the required sensors (`RFMD`, `1RSS`, `RQly`) never show up, it plays a separate **configuration-error tone** so you know it cannot warn you. The tone repeats every 30 seconds until the sensors appear.
+
+---
+
+## 🧩 Script variants
+
+The warning logic lives in a shared core module (`core.lua`). On top of it sit two wrappers — **pick exactly one**:
+
+| | **Function script** | **Widget** |
+|---|---|---|
+| Audible warnings | ✅ | ✅ |
+| Visual link display | — | ✅ (range %, RF mode, RSSI, LQ, TX power, FC flight mode, active antenna, ELRS module + firmware) |
+| Runs in the background | ✅ (Special Function) | ✅ (keeps warning even when the screen is not shown) |
+| Supported radios | all EdgeTX radios | color-display radios only |
+
+> ⚠️ **Don't install both at the same time** — they would play the warning tones twice. The widget fully replaces the function script.
+
+Both variants need `core.lua` on the SD card — it holds the shared warning logic, so audio and display always stay in sync.
 
 ---
 
 ## 🧰 Requirements
 
-- A radio running EdgeTX
+- A radio running EdgeTX (color display required for the widget variant)
 - An ExpressLRS receiver running firmware 4.0 or newer with telemetry enabled
-- The following ELRS telemetry sensors must be discovered on the radio: `RFMD`, `1RSS`, `RQly`, and `2RSS` on dual-antenna receivers (they appear automatically after a telemetry discovery)
+- The following ELRS telemetry sensors must be discovered on the radio (they appear automatically after a telemetry discovery):
+  - **Mandatory:** `RFMD`, `1RSS`, `RQly`
+  - **Dual-antenna receivers:** `2RSS`
+  - **Widget display only (optional):** `ANT`, `TPWR`, `FM` — shown when present
 
 ---
 
@@ -63,12 +84,17 @@ If telemetry is up but the required sensors (`1RSS`, `RQly`) never show up (typi
 
 ### 1. Copy the files to the SD card
 
-Take the SD card out of the radio (or connect the radio via USB as mass storage) and create the following structure:
+Take the SD card out of the radio (or connect the radio via USB as mass storage). Just copy everything below 1:1 — it does no harm to have both variants on the card. You then pick which one to use later by **either** activating the widget **or** adding the function script to a Special Function (just not both, see [Script variants](#-script-variants)):
 
 ```
 SCRIPTS/
+├── SNTNL/
+│   └── core.lua            ← shared logic (used by both variants)
 └── FUNCTIONS/
-    └── sntnl.lua
+    └── sntnl.lua           ← function-script variant
+WIDGETS/
+└── SNTNL/
+    └── main.lua            ← widget variant
 SOUNDS/
 └── en/
     └── SCRIPTS/
@@ -78,9 +104,9 @@ SOUNDS/
             └── cfgerr.wav
 ```
 
-All four files are available in the matching folders of this repository. Just copy them 1:1 to the same locations on the SD card. The WAV files always live under `/SOUNDS/en/SCRIPTS/SNTNL/` regardless of the radio's language setting; `sntnl.lua` uses an absolute path to play them.
+All files are available in the matching folders of this repository — just copy them to the same locations on the SD card. The WAV files always live under `/SOUNDS/en/SCRIPTS/SNTNL/` regardless of the radio's language setting; the script uses an absolute path to play them.
 
-### 2. Set up a Special Function on the model
+### 2a. Set up the function script (Special Function)
 
 1. Put the SD card back into the radio and switch it on.
 2. Open the **Model Settings** of the desired model and go to the **Special Functions** (also called "SF") page.
@@ -92,38 +118,48 @@ All four files are available in the matching folders of this repository. Just co
    - **Enable:** `On`
 4. Save the settings.
 
+### 2b. *(Alternative)* Set up the widget
+
+1. Put the SD card back into the radio and switch it on.
+2. Open the model's **Telemetry / Display** (widget screens) configuration.
+3. Add a widget to a free zone and pick **Sentinel** from the list.
+4. *(Optional)* Open the widget settings to choose the **Theme** (`Dark` / `Light`) and, on the light theme, a milky-overlay **Transp**arency level.
+
 ### 3. Test it
 
 - Bind the model and verify telemetry (RSSI values and RQly must show up on the radio).
 - When you intentionally weaken the link (e.g. move the model away, cover an antenna), the first warning tone should play after about 2 seconds and repeat every 5 seconds.
-- With a very weak link **and** packet loss the script automatically switches to the critical warning tone.
+- With a very weak link **and** packet loss the sentinel automatically switches to the critical warning tone.
+- On the widget, the range bar fills towards 100 % and changes color (green → yellow → red) in lockstep with the audio warning.
 
 ---
 
 ## ⚙️ Customizing
 
-If you want to tweak the thresholds or timings, open `sntnl.lua` in a text editor. The first lines of the script define four constants:
+All tunable parameters live in **one place** — the `M.PARAMS` table near the top of `/SCRIPTS/SNTNL/core.lua`. Open it in a text editor; both variants pick up the change automatically:
 
-| Constant          | Default | Meaning                                              |
-|-------------------|---------|------------------------------------------------------|
-| `WARN_OFFSET_DB`  | `10`    | Margin above the sensitivity limit (dBm) that triggers a warning |
-| `RQLY_THRESHOLD`  | `42`    | RQly threshold in % for the critical warning        |
-| `DEBOUNCE_MS`     | `2000`  | How long the condition must hold (ms)               |
-| `REPEAT_MS`       | `5000`  | Gap between two warning tones (ms)                  |
+| Constant            | Default | Meaning                                                          |
+|---------------------|---------|------------------------------------------------------------------|
+| `WARN_OFFSET_DB`    | `10`    | Margin above the sensitivity limit (dBm) that triggers a warning |
+| `RQLY_THRESHOLD`    | `42`    | RQly threshold in % for the critical warning                     |
+| `DEBOUNCE_MS`       | `2000`  | How long the condition must hold before (de)activating (ms)      |
+| `REPEAT_MS`         | `5000`  | Gap between two warning tones (ms)                               |
 
 After saving, copy the file back to the SD card. No reboot needed; EdgeTX reloads the script the next time the model is activated.
 
 ### Replacing the warning sounds
 
-If you don't like the supplied tones, feel free to drop in your own audio files. Just keep the file names exactly as they are (`stage1.wav` for the warning, `stage2.wav` for the critical alert) and leave them in the `/SOUNDS/en/SCRIPTS/SNTNL/` folder.
+If you don't like the supplied tones, feel free to drop in your own audio files. Just keep the file names exactly as they are (`stage1.wav` for the warning, `stage2.wav` for the critical alert, `cfgerr.wav` for the configuration-error tone) and leave them in the `/SOUNDS/en/SCRIPTS/SNTNL/` folder.
 
 ---
 
 ## 🛠️ Troubleshooting
 
 - **Script doesn't show up when picking it for the Special Function:** Check the file name. It must be exactly `sntnl.lua` (max. 6 characters, otherwise EdgeTX hides function scripts).
+- **Widget shows "Core missing / Reinstall SNTNL", or the function script errors on load:** `core.lua` is not where it should be. Make sure `/SCRIPTS/SNTNL/core.lua` exists on the SD card — both variants depend on it.
+- **Widget shows "Sensor missing / Discover in EdgeTX" (and the config-error tone plays):** One of the mandatory sensors (`RFMD`, `1RSS`, `RQly`) is missing. Run a telemetry discovery on the radio while the link is up.
 - **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/SNTNL/` (the `en/` folder is mandatory even if your radio is set to another language).
-- **Permanent warning despite good reception:** Your ELRS setup is probably using a mode whose sensitivity limit isn't yet listed in the script. Please [open an issue](../../issues) so it can be added.
+- **Permanent warning / range shows "--" despite good reception:** Your ELRS setup is probably using a mode whose sensitivity limit isn't yet listed in `core.lua`. Please [open an issue](../../issues) so it can be added.
 
 ---
 
@@ -141,7 +177,7 @@ Found a bug, have an idea for an improvement, or running an ELRS mode that isn't
 
 ## ⚠️ Disclaimer
 
-This script is provided **as is** and is intended as an additional aid only. It does **not** replace careful flying within visual range, your own judgement, or the safety mechanisms of your transmitter and receiver. Always be ready to react manually. Use at your own risk.
+This project is provided **as is** and is intended as an additional aid only. It does **not** replace careful flying within visual range, your own judgement, or the safety mechanisms of your transmitter and receiver. Always be ready to react manually. Use at your own risk.
 
 ---
 
