@@ -7,15 +7,6 @@
 -- whichever one is installed):
 --   * the function script  /SCRIPTS/FUNCTIONS/sntnl.lua  (audio only)
 --   * the widget           /WIDGETS/SNTNL/main.lua       (audio + display)
---
--- core owns: the reference tables (from elrs_modes.md), the user parameters,
--- reading ALL telemetry (readSnapshot), the warning state machine (evaluate)
--- and sound playback (update). It does NOT do any display derivation and
--- never calls lcd.* -- that lives entirely in the widget.
---
--- State is caller-owned (newState): a widget can be instantiated multiple
--- times and all instances share this one loaded module, so per-instance state
--- must not live in module locals.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
@@ -37,18 +28,19 @@
 local M = {}
 
 -- ---------------------------------------------------------------------
--- Configurable parameters. A single source of truth for both variants --
--- the widget must read shared thresholds (e.g. RQLY_THRESHOLD for its LQ
--- bar colour) from here, never hard-code them, or the display would drift
--- from the acoustic warning.
+-- Tunable parameters, shared by both variants. The widget must read thresholds
+-- (e.g. RQLY_THRESHOLD) from here, never hard-code them, or the display drifts
+-- from the audio warning.
 -- ---------------------------------------------------------------------
 M.PARAMS = {
-  WARN_OFFSET_DB    = 10,     -- Offset (dBm) added on top of the sensitivity limit
-  RQLY_THRESHOLD    = 42,     -- Lower RQly bound in % for stage 2
-  DEBOUNCE_MS       = 2000,   -- Debounce time in ms (activation and deactivation)
-  REPEAT_MS         = 5000,   -- Sound repeat interval in ms
-  CFG_ERR_GRACE_MS  = 10000,  -- Grace period before the cfg-error sound is first played
-  CFG_ERR_REPEAT_MS = 30000,  -- Cfg-error sound repeat interval in ms
+  WARN_OFFSET_DB     = 10,     -- Offset (dBm) added on top of the sensitivity limit
+  RQLY_THRESHOLD     = 42,     -- Lower RQly bound in % for stage 2
+  DEBOUNCE_MS        = 2000,   -- Debounce time in ms (activation and deactivation)
+  REPEAT_MS          = 5000,   -- Sound repeat interval in ms
+  LINK_LOSS_GRACE_MS = 250,    -- Tolerate a telemetry gap this long before resetting the
+                               -- warning state (see evaluate); well under the ~1 s ELRS failsafe.
+  CFG_ERR_GRACE_MS   = 10000,  -- Grace period before the cfg-error sound is first played
+  CFG_ERR_REPEAT_MS  = 30000,  -- Cfg-error sound repeat interval in ms
 }
 
 -- Sound files. Absolute paths bypass EdgeTX's per-language resolution so the
@@ -65,7 +57,7 @@ M.SENSORS = {
   rfmd  = "RFMD", ant  = "ANT",   tpwr = "TPWR", fm = "FM",
 }
 
--- Sensitivity limits in dBm per RFMD (see elrs_modes.md).
+-- Sensitivity limits in dBm per RFMD.
 -- Entries with 0 dBm are intentional placeholders and produce a permanent
 -- warning -- a hint that this mode still needs to be filled in.
 M.SENS_LIMIT = {
@@ -105,9 +97,8 @@ M.SENS_LIMIT = {
   [101] = -112,  -- X150Hz
 }
 
--- Human-readable mode names per RFMD (Lua-Name column of elrs_modes.md). Used
--- only for display; the widget reads M.MODE_NAMES[rfmd]. nil for an unknown
--- mode -> the widget falls back to showing the raw RFMD number.
+-- Human-readable mode names per RFMD, display-only. nil for an unknown mode ->
+-- the widget falls back to showing the raw RFMD number.
 M.MODE_NAMES = {
   -- 900 MHz / Sub-GHz
   [0]   = "25Hz",
@@ -175,6 +166,9 @@ function M.newState()
     warnThreshold = nil,
     stage1 = { condSince = 0, active = false, lastPlay = 0 },
     stage2 = { condSince = 0, active = false, lastPlay = 0 },
+    -- linkLostSince marks when telemetry first went away (0 = link present); drives
+    -- the brief-gap grace before resetAll().
+    linkLostSince  = 0,
     -- cfgErrSince marks when the missing-sensor situation was first observed
     -- (drives the grace period); cfgErrLastPlay drives the repeat timer.
     cfgErrSince    = 0,
@@ -251,17 +245,22 @@ end
 function M.evaluate(state, snap, now)
   local result = {}
 
-  -- Telemetry lost -> reset all state and stay silent. ELRS itself alarms on a
-  -- real telemetry loss; this script does not cover that case.
+  -- Telemetry lost -> stay silent (ELRS alarms on a real loss itself). Do NOT reset
+  -- immediately: a brief gap must not wipe an active warning, or both stages re-debounce
+  -- in parallel on reconnect and flash a spurious OK between WARNING and CRITICAL. Reset
+  -- only once the loss persists LINK_LOSS_GRACE_MS (well before the ~1 s ELRS failsafe).
   if not snap.rssiValid then
-    resetAll(state)
+    if state.linkLostSince == 0 then state.linkLostSince = now end
+    if (now - state.linkLostSince) >= M.PARAMS.LINK_LOSS_GRACE_MS then
+      resetAll(state)
+    end
     result.status = "no_link"
     return result
   end
+  state.linkLostSince = 0   -- telemetry present again -> clear the loss timer
 
   -- 1RSS, RQly and RFMD are mandatory. After a grace period (to tolerate
-  -- sensor-discovery delays) flag cfgerr so the pilot knows the script cannot
-  -- warn because of a missing-sensor configuration problem.
+  -- sensor-discovery delays) flag cfgerr -- the script cannot warn without them.
   if not snap.has1RSS or not snap.hasRQly or not snap.hasRFMD then
     result.status = "cfg_error"
     if state.cfgErrSince == 0 then
@@ -291,7 +290,7 @@ function M.evaluate(state, snap, now)
   local sensLimit = M.SENS_LIMIT[rfmd] or 0
 
   -- Governing RSS: the stronger antenna, or 1RSS when there is no second one
-  -- (2RSS == 0, e.g. RP1). stage 1 = even this one weak (== "both antennas weak").
+  -- (2RSS == 0, single-antenna receiver). stage 1 fires when even this one is weak.
   local rss1, rss2, rqly = snap.rss1, snap.rss2, snap.rqly
   local dual       = (rss2 ~= nil and rss2 ~= 0)
   local linkRssi   = dual and math.max(rss1, rss2) or rss1
