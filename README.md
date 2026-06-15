@@ -125,6 +125,12 @@ All files are available in the matching folders of this repository — just copy
 3. Add a widget to a free zone and pick **Sentinel** from the list.
 4. *(Optional)* Open the widget settings to choose the **Theme** (`Dark` / `Light`) and, on the light theme, a milky-overlay **Transp**arency level.
 
+> 📐 **Recommended screen layouts:** EdgeTX names its widget-screen layouts `columns × rows` (e.g. `2×4` = 2 columns next to each other, 4 rows on top of each other → 8 zones). The Sentinel widget is designed for a **half-width** zone, so it looks best in the layouts with **2 columns**:
+>
+> - **2×2** — half width, half height (the quarter-tile). This is the primary use case and shows the full layout with every value.
+> - **2×3** — half width, one third height. Slightly shorter, so the widget automatically switches to a more compact layout.
+> - **2×4** — half width, one quarter height. The shortest supported zone; it falls back to the most compact layout to stay readable.
+
 ### 3. Test it
 
 - Bind the model and verify telemetry (RSSI values and RQly must show up on the radio).
