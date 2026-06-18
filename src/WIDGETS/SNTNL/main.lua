@@ -118,7 +118,7 @@ end
 local options = {
   { "Theme",    CHOICE, 1, { "Dark", "Light" } },  -- 1=Dark, 2=Light (EdgeTX 2.11+)
   { "Transp",   VALUE,  2, 0, 5 },                  -- milky overlay, Light only
-  { "TxtColor",  CHOICE, 1, { "Standard", "Theme", "Custom" } },  -- heading/brand text: 1=accent, 2=theme focus, 3=custom
+  { "TxtColor",  CHOICE, 1, { "Default", "Theme", "Custom" } },  -- heading/brand text: 1=accent, 2=theme focus, 3=custom
   { "CustomCol", COLOR,  lcd.RGB(124, 210, 48) },                 -- used only when TxtColor = Custom
 }
 

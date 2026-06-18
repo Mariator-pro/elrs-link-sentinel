@@ -123,7 +123,10 @@ All files are available in the matching folders of this repository — just copy
 1. Put the SD card back into the radio and switch it on.
 2. Open the model's **Telemetry / Display** (widget screens) configuration.
 3. Add a widget to a free zone and pick **Sentinel** from the list.
-4. *(Optional)* Open the widget settings to choose the **Theme** (`Dark` / `Light`) and, on the light theme, a milky-overlay **Transp**arency level.
+4. *(Optional)* Open the widget settings to adjust:
+   - **Theme** — `Dark` / `Light`.
+   - **Transparency** — milky-overlay transparency level (light theme only).
+   - **TxtColor** — color of the heading / brand text: `Default` (the classic green), `Theme` (the focus color of your active EdgeTX theme), or `Custom` (pick any color via **CustomCol**).
 
 > 📐 **Recommended screen layouts:** EdgeTX names its widget-screen layouts `columns × rows` (e.g. `2×4` = 2 columns next to each other, 4 rows on top of each other → 8 zones). The Sentinel widget is designed for a **half-width** zone, so it looks best in the layouts with **2 columns**:
 >
