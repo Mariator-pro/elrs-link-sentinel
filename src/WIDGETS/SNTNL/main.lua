@@ -92,12 +92,34 @@ local EYE_RIM   = lcd.RGB( 20,  20,  20)
 -- path and only one instance runs at a time.
 local COLORS = DARK
 
+-- Heading/brand text colour, separate from the stage (OK/warn/crit) colours so the
+-- TxtColor option only repaints the brand, never the state bars/thresholds. Set per
+-- frame; default is the palette's accent green (so Light/Dark each keep their green).
+local BRAND = DARK.accent
+
+-- Resolve the brand text colour from the TxtColor option. "Theme" pulls the active
+-- EdgeTX theme's focus colour, "Custom" the COLOR option's picked value; lcd.getColor
+-- normalises either to an RGB value usable by dtext/CUSTOM_COLOR (and the COLOR option
+-- may be a theme index, not a raw RGB). Falls back to accent green if unavailable.
+local function brandColor(opt, customCol)
+  if opt == 2 and lcd.getColor then
+    local c = lcd.getColor(COLOR_THEME_FOCUS)
+    if c then return c end
+  elseif opt == 3 and customCol then
+    local c = lcd.getColor and lcd.getColor(customCol) or customCol
+    if c then return c end
+  end
+  return COLORS.accent
+end
+
 -- ---------------------------------------------------------------------
 -- Widget options (EdgeTX limits: name <= 10 chars, no spaces, <=5 on 2.10)
 -- ---------------------------------------------------------------------
 local options = {
-  { "Theme",  CHOICE, 1, { "Dark", "Light" } },  -- 1=Dark, 2=Light (EdgeTX 2.11+)
-  { "Transp", VALUE,  2, 0, 5 },                  -- milky overlay, Light only
+  { "Theme",    CHOICE, 1, { "Dark", "Light" } },  -- 1=Dark, 2=Light (EdgeTX 2.11+)
+  { "Transp",   VALUE,  2, 0, 5 },                  -- milky overlay, Light only
+  { "TxtColor",  CHOICE, 1, { "Standard", "Theme", "Custom" } },  -- heading/brand text: 1=accent, 2=theme focus, 3=custom
+  { "CustomCol", COLOR,  lcd.RGB(124, 210, 48) },                 -- used only when TxtColor = Custom
 }
 
 -- ---------------------------------------------------------------------
@@ -292,13 +314,13 @@ end
 -- Drawing
 -- ---------------------------------------------------------------------
 
--- Brand header: accent square + label, one text line tall (no padding) to stay
+-- Brand header: brand-coloured square + label, one text line tall (no padding) to stay
 -- compact in tight tiers. Returns its height.
 local function drawHeader(x, y, label)
   local hdrH = select(2, lcd.sizeText("0", SMLSIZE))
   local sq   = sx(5)
-  lcd.drawFilledRectangle(x, y + math.floor((hdrH - sq) / 2), sq, sq, COLORS.accent)
-  dtext(x + sq + sx(3), y, label, COLORS.accent, SMLSIZE)
+  lcd.drawFilledRectangle(x, y + math.floor((hdrH - sq) / 2), sq, sq, BRAND)
+  dtext(x + sq + sx(3), y, label, BRAND, SMLSIZE)
   return hdrH
 end
 
@@ -348,7 +370,7 @@ local function drawNoLink(ctx, x0, y0, W, H)
 
   if H >= tH + gap + sH + modH then
     local by = y0 + math.floor((H - (tH + gap + sH + modH)) / 2)
-    dtext(cx, by, title, COLORS.accent, tFlag + CENTER)
+    dtext(cx, by, title, BRAND, tFlag + CENTER)
     drawStatusBlock(by + tH + gap)
   else
     drawStatusBlock(y0 + math.floor((H - (sH + modH)) / 2))
@@ -404,7 +426,7 @@ end
 -- Returns the header-band height it occupies.
 local function drawBrandHeading(z)
   local pad = sx(4)
-  dtext(pad, pad, "LINK-SENTINEL", COLORS.accent, SMLSIZE)
+  dtext(pad, pad, "LINK-SENTINEL", BRAND, SMLSIZE)
   local hw, hh   = lcd.sizeText("LINK-SENTINEL", SMLSIZE)
   local eyeX, eyeW = pad + hw + sx(6), sx(20)
   if eyeX + eyeW <= z.w then
@@ -457,7 +479,7 @@ end
 local function drawMainFull(z, W, H, x0, y0, d)
   local sc = stageColor(d.stage)
 
-  -- Header: accent square + module/FW (brand placeholder until CRSF device-info).
+  -- Header: brand square + module/FW (brand placeholder until CRSF device-info).
   local hdrLabel = d.module and (d.module .. " (v" .. d.fw .. ")") or "LINK-SENTINEL"
   local hdrH     = drawHeader(x0, y0, hdrLabel)
 
@@ -848,6 +870,7 @@ local function refresh(ctx, event, touchState)
 
   local z = ctx.zone
   COLORS = (ctx.options.Theme == 2) and LIGHT or DARK
+  BRAND  = brandColor(ctx.options.TxtColor, ctx.options.CustomCol)
 
   -- Background per theme.
   if not COLORS.transparent then
