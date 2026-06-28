@@ -37,3 +37,6 @@ secrets.json.venv/
 # Edgetx simulator
 src/MODELS
 src/RADIO
+
+# Runtime data
+config.lua

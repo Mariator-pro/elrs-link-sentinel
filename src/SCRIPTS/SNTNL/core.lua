@@ -41,7 +41,13 @@ M.PARAMS = {
                                -- warning state (see evaluate); well under the ~1 s ELRS failsafe.
   CFG_ERR_GRACE_MS   = 10000,  -- Grace period before the cfg-error sound is first played
   CFG_ERR_REPEAT_MS  = 30000,  -- Cfg-error sound repeat interval in ms
+  HAPTIC             = false,  -- Vibrate alongside the warning sound (opt-in)
+  HAPTIC_STRENGTH    = 2,      -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
 }
+
+-- playHaptic pulse length per strength tier. Stage 2 (critical) fires a second
+-- pulse to feel clearly stronger than Stage 1.
+M.HAPTIC_DUR = { [1] = 15, [2] = 30, [3] = 50 }
 
 -- Sound files. Absolute paths bypass EdgeTX's per-language resolution so the
 -- same files play regardless of the radio's language setting.
@@ -50,6 +56,77 @@ M.SOUNDS = {
   stage2 = "/SOUNDS/en/SCRIPTS/SNTNL/stage2.wav",
   cfgerr = "/SOUNDS/en/SCRIPTS/SNTNL/cfgerr.wav",
 }
+
+-- ---------------------------------------------------------------------
+-- Optional configuration overlay. The Tools-Script (/SCRIPTS/TOOLS/SNTNL.lua)
+-- writes /SCRIPTS/SNTNL/config.lua; both variants pick it up here, so there is
+-- no second place that reads the user's thresholds/sounds. The file is OPTIONAL:
+-- without it (or with a broken one) the hard-coded defaults above stay in force.
+-- ---------------------------------------------------------------------
+local CONFIG_PATH           = "/SCRIPTS/SNTNL/config.lua"
+local CONFIG_SCHEMA_VERSION = 1
+
+-- Editable ranges -- the SINGLE source of truth, also read by the Tools-Script
+-- so the on-radio editor and the runtime clamp can never drift apart.
+M.LIMITS = {
+  WARN_OFFSET_DB  = { min = 10, max = 30 },   -- Stage 1 dB offset over the sens. limit
+  RQLY_THRESHOLD  = { min = 30, max = 70 },   -- Stage 2 RQly % bound
+  HAPTIC_STRENGTH = { min = 1,  max = 3 },    -- Haptic pulse-length tier
+}
+
+-- Snapshot of the hard-coded defaults, used as the per-field fallback when a
+-- config omits a value (or sets "Default" = nil for a sound). Taken before any
+-- override runs, so applyConfigOverrides is idempotent regardless of call order.
+local DEFAULTS = {
+  warnOffsetDb   = M.PARAMS.WARN_OFFSET_DB,
+  rqlyThreshold  = M.PARAMS.RQLY_THRESHOLD,
+  haptic         = M.PARAMS.HAPTIC,
+  hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
+  stage1Sound    = M.SOUNDS.stage1,
+  stage2Sound    = M.SOUNDS.stage2,
+}
+
+-- Clamp helper: n into [lo, hi]; non-numbers fall back to `fallback`.
+local function clampNum(n, lo, hi, fallback)
+  if type(n) ~= "number" then return fallback end
+  if n < lo then return lo elseif n > hi then return hi end
+  return n
+end
+
+-- Apply a parsed config table over PARAMS/SOUNDS (pure: no file I/O, so it is
+-- directly unit-testable). Clamps the thresholds to M.LIMITS so even a corrupt
+-- config can never set an unsafe value; a nil sound means "use the default".
+function M.applyConfigOverrides(cfg)
+  cfg = cfg or {}
+  local L = M.LIMITS
+  M.PARAMS.WARN_OFFSET_DB = clampNum(cfg.warnOffsetDb,
+    L.WARN_OFFSET_DB.min, L.WARN_OFFSET_DB.max, DEFAULTS.warnOffsetDb)
+  M.PARAMS.RQLY_THRESHOLD = clampNum(cfg.rqlyThreshold,
+    L.RQLY_THRESHOLD.min, L.RQLY_THRESHOLD.max, DEFAULTS.rqlyThreshold)
+  M.PARAMS.HAPTIC = (cfg.haptic == true)   -- only an explicit true enables it
+  M.PARAMS.HAPTIC_STRENGTH = clampNum(cfg.hapticStrength,
+    L.HAPTIC_STRENGTH.min, L.HAPTIC_STRENGTH.max, DEFAULTS.hapticStrength)
+  local snd = cfg.sounds or {}
+  M.SOUNDS.stage1 = snd.stage1 or DEFAULTS.stage1Sound
+  M.SOUNDS.stage2 = snd.stage2 or DEFAULTS.stage2Sound
+end
+
+-- Load the optional config ONCE at module load. The thresholds are ground-config
+-- (set in the Tools-Script, not retuned mid-flight), so a one-shot read at
+-- init/create is enough -- a change takes effect on the next model select / reboot,
+-- with no per-tick file I/O. Fully fault tolerant: a missing or broken file simply
+-- leaves the hard-coded defaults in force. Wrapped in pcall, and a silent no-op on
+-- desktop (no io / loadfile path) so the unit tests are unaffected.
+local function loadConfigOnce()
+  local f = io.open(CONFIG_PATH, "r")
+  if not f then return end                                 -- no config -> defaults
+  f:close()
+  local ok, result = pcall(dofile, CONFIG_PATH)
+  if not ok or type(result) ~= "table" then return end     -- parse error -> defaults
+  if result.schemaVersion ~= CONFIG_SCHEMA_VERSION then return end
+  M.applyConfigOverrides(result)
+end
+pcall(loadConfigOnce)
 
 -- Telemetry sensor names (CRSF/ELRS standard).
 M.SENSORS = {
@@ -330,6 +407,17 @@ function M.evaluate(state, snap, now)
   return result
 end
 
+-- Vibrate alongside a warning. `pulses` = 1 for Stage 1, 2 for the stronger
+-- Stage 2. No-op when haptic is off or the build lacks playHaptic (desktop
+-- tests), so it never touches the pure logic above.
+local function warnHaptic(pulses)
+  if not M.PARAMS.HAPTIC or not playHaptic then return end
+  local dur = M.HAPTIC_DUR[M.PARAMS.HAPTIC_STRENGTH] or M.HAPTIC_DUR[2]
+  for i = 1, pulses do
+    playHaptic(dur, (i < pulses) and dur or 0)   -- gap between pulses, none after the last
+  end
+end
+
 -- ---------------------------------------------------------------------
 -- One full cycle: read -> evaluate -> play. Returns the result table plus the
 -- raw snapshot for the widget. The function script ignores the return value;
@@ -343,8 +431,10 @@ function M.update(state, now)
 
   if result.playStage2 then
     playFile(M.SOUNDS.stage2)
+    warnHaptic(2)
   elseif result.playStage1 then
     playFile(M.SOUNDS.stage1)
+    warnHaptic(1)
   end
   if result.playCfgErr then
     playFile(M.SOUNDS.cfgerr)

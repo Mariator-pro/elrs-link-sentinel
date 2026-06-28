@@ -21,7 +21,8 @@
 -- Responsive scaling: every pixel constant runs through sx(); positions scale
 -- with S, fonts are fixed EdgeTX stages.
 -- ---------------------------------------------------------------------
-local S = (LCD_W or 480) / 480
+local REF_W = 480
+local S     = (LCD_W or REF_W) / REF_W
 local function sx(v) return math.floor(v * S + 0.5) end
 
 -- Slack on the tier thresholds so a zone sitting a pixel or two above a boundary
@@ -93,14 +94,14 @@ local EYE_RIM   = lcd.RGB( 20,  20,  20)
 local COLORS = DARK
 
 -- Heading/brand text colour, separate from the stage (OK/warn/crit) colours so the
--- TxtColor option only repaints the brand, never the state bars/thresholds. Set per
+-- Accent option only repaints the brand, never the state bars/thresholds. Set per
 -- frame; default is the palette's accent green (so Light/Dark each keep their green).
 local BRAND = DARK.accent
 
--- Resolve the brand text colour from the TxtColor option. "Theme" pulls the active
--- EdgeTX theme's focus colour, "Custom" the COLOR option's picked value; lcd.getColor
--- normalises either to an RGB value usable by dtext/CUSTOM_COLOR (and the COLOR option
--- may be a theme index, not a raw RGB). Falls back to accent green if unavailable.
+-- Resolve the brand text colour from the Accent option: "Theme" pulls the active
+-- EdgeTX theme's focus colour, "Custom" the AccentColor picker value. lcd.getColor
+-- normalises either to a real RGB (the picker value may be a theme index, not raw
+-- RGB). Falls back to the palette accent (Default) if unavailable.
 local function brandColor(opt, customCol)
   if opt == 2 and lcd.getColor then
     local c = lcd.getColor(COLOR_THEME_FOCUS)
@@ -111,16 +112,6 @@ local function brandColor(opt, customCol)
   end
   return COLORS.accent
 end
-
--- ---------------------------------------------------------------------
--- Widget options (EdgeTX limits: name <= 10 chars, no spaces, <=5 on 2.10)
--- ---------------------------------------------------------------------
-local options = {
-  { "Theme",    CHOICE, 1, { "Dark", "Light" } },  -- 1=Dark, 2=Light (EdgeTX 2.11+)
-  { "Transp",   VALUE,  2, 0, 5 },                  -- milky overlay, Light only
-  { "TxtColor",  CHOICE, 1, { "Default", "Theme", "Custom" } },  -- heading/brand text: 1=accent, 2=theme focus, 3=custom
-  { "CustomCol", COLOR,  lcd.RGB(124, 210, 48) },                 -- used only when TxtColor = Custom
-}
 
 -- ---------------------------------------------------------------------
 -- Text helper: custom color via CUSTOM_COLOR so a raw RGB never collides
@@ -870,13 +861,13 @@ local function refresh(ctx, event, touchState)
 
   local z = ctx.zone
   COLORS = (ctx.options.Theme == 2) and LIGHT or DARK
-  BRAND  = brandColor(ctx.options.TxtColor, ctx.options.CustomCol)
+  BRAND  = brandColor(ctx.options.Accent, ctx.options.AccentColor)
 
   -- Background per theme.
   if not COLORS.transparent then
     lcd.drawFilledRectangle(0, 0, z.w, z.h, COLORS.panel)
   else
-    local trans = ctx.options.Transp or 0
+    local trans = ctx.options.Transparency or 0
     if trans > 0 then
       lcd.drawFilledRectangle(0, 0, z.w, z.h, COLOR_THEME_PRIMARY2, 3 * trans)
     end
@@ -946,7 +937,18 @@ end
 
 return {
   name       = "Sentinel",
-  options    = options,
+  options    = {
+    -- Theme dropdown (CHOICE labels are a nested table; the value is the 1-based
+    -- index, so default 1 = "Dark"; needs EdgeTX 2.11+). Transparency = milky overlay
+    -- 0–5 (default 2), applied in the Light theme only (Dark stays solid black).
+    { "Theme", CHOICE, 1, { "Dark", "Light" } },
+    { "Transparency", VALUE, 2, 0, 5 },
+    -- Brand/heading colour. Accent: 1 Default (per-palette green), 2 Theme
+    -- (COLOR_THEME_FOCUS), 3 Custom (AccentColor). AccentColor shows the native colour
+    -- picker; only used when Accent = Custom, default = the original Dark lime.
+    { "Accent", CHOICE, 1, { "Default", "Theme", "Custom" } },
+    { "AccentColor", COLOR, lcd.RGB(124, 210, 48) },
+  },
   create     = create,
   update     = update,
   refresh    = refresh,
