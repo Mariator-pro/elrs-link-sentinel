@@ -63,8 +63,10 @@ M.SOUNDS = {
 -- no second place that reads the user's thresholds/sounds. The file is OPTIONAL:
 -- without it (or with a broken one) the hard-coded defaults above stay in force.
 -- ---------------------------------------------------------------------
-local CONFIG_PATH           = "/SCRIPTS/SNTNL/config.lua"
-local CONFIG_SCHEMA_VERSION = 1
+-- Exported: the Tools-Script (the config WRITER) reads path and schema version
+-- from here, so writer and reader can never drift apart.
+M.CONFIG_PATH           = "/SCRIPTS/SNTNL/config.lua"
+M.CONFIG_SCHEMA_VERSION = 1
 
 -- Editable ranges -- the SINGLE source of truth, also read by the Tools-Script
 -- so the on-radio editor and the runtime clamp can never drift apart.
@@ -77,7 +79,9 @@ M.LIMITS = {
 -- Snapshot of the hard-coded defaults, used as the per-field fallback when a
 -- config omits a value (or sets "Default" = nil for a sound). Taken before any
 -- override runs, so applyConfigOverrides is idempotent regardless of call order.
-local DEFAULTS = {
+-- Exported: the Tools-Script reads the TRUE factory defaults from here -- PARAMS
+-- and SOUNDS are already config-overlaid by the time the tool loads core.
+M.DEFAULTS = {
   warnOffsetDb   = M.PARAMS.WARN_OFFSET_DB,
   rqlyThreshold  = M.PARAMS.RQLY_THRESHOLD,
   haptic         = M.PARAMS.HAPTIC,
@@ -85,12 +89,27 @@ local DEFAULTS = {
   stage1Sound    = M.SOUNDS.stage1,
   stage2Sound    = M.SOUNDS.stage2,
 }
+local DEFAULTS = M.DEFAULTS
 
 -- Clamp helper: n into [lo, hi]; non-numbers fall back to `fallback`.
 local function clampNum(n, lo, hi, fallback)
   if type(n) ~= "number" then return fallback end
   if n < lo then return lo elseif n > hi then return hi end
   return n
+end
+
+-- Boolean helper: a plain `or` would swallow an explicit false, so anything
+-- that is not a real boolean falls back instead.
+local function boolOr(v, fallback)
+  if type(v) == "boolean" then return v end
+  return fallback
+end
+
+-- String helper: sound paths must be strings -- anything else falls back so a
+-- corrupt config can never reach playFile.
+local function strOr(v, fallback)
+  if type(v) == "string" then return v end
+  return fallback
 end
 
 -- Apply a parsed config table over PARAMS/SOUNDS (pure: no file I/O, so it is
@@ -103,27 +122,27 @@ function M.applyConfigOverrides(cfg)
     L.WARN_OFFSET_DB.min, L.WARN_OFFSET_DB.max, DEFAULTS.warnOffsetDb)
   M.PARAMS.RQLY_THRESHOLD = clampNum(cfg.rqlyThreshold,
     L.RQLY_THRESHOLD.min, L.RQLY_THRESHOLD.max, DEFAULTS.rqlyThreshold)
-  M.PARAMS.HAPTIC = (cfg.haptic == true)   -- only an explicit true enables it
+  M.PARAMS.HAPTIC = boolOr(cfg.haptic, DEFAULTS.haptic)
   M.PARAMS.HAPTIC_STRENGTH = clampNum(cfg.hapticStrength,
     L.HAPTIC_STRENGTH.min, L.HAPTIC_STRENGTH.max, DEFAULTS.hapticStrength)
-  local snd = cfg.sounds or {}
-  M.SOUNDS.stage1 = snd.stage1 or DEFAULTS.stage1Sound
-  M.SOUNDS.stage2 = snd.stage2 or DEFAULTS.stage2Sound
+  local snd = (type(cfg.sounds) == "table") and cfg.sounds or {}
+  M.SOUNDS.stage1 = strOr(snd.stage1, DEFAULTS.stage1Sound)
+  M.SOUNDS.stage2 = strOr(snd.stage2, DEFAULTS.stage2Sound)
 end
 
 -- Load the optional config ONCE at module load. The thresholds are ground-config
 -- (set in the Tools-Script, not retuned mid-flight), so a one-shot read at
 -- init/create is enough -- a change takes effect on the next model select / reboot,
 -- with no per-tick file I/O. Fully fault tolerant: a missing or broken file simply
--- leaves the hard-coded defaults in force. Wrapped in pcall, and a silent no-op on
--- desktop (no io / loadfile path) so the unit tests are unaffected.
+-- leaves the hard-coded defaults in force. loadScript is the documented EdgeTX way
+-- to load a Lua file (nil when missing/broken) and does not exist on desktop, so
+-- the unit tests are unaffected.
 local function loadConfigOnce()
-  local f = io.open(CONFIG_PATH, "r")
-  if not f then return end                                 -- no config -> defaults
-  f:close()
-  local ok, result = pcall(dofile, CONFIG_PATH)
+  local chunk = loadScript and loadScript(M.CONFIG_PATH)
+  if not chunk then return end                             -- no config -> defaults
+  local ok, result = pcall(chunk)
   if not ok or type(result) ~= "table" then return end     -- parse error -> defaults
-  if result.schemaVersion ~= CONFIG_SCHEMA_VERSION then return end
+  if result.schemaVersion ~= M.CONFIG_SCHEMA_VERSION then return end
   M.applyConfigOverrides(result)
 end
 pcall(loadConfigOnce)
@@ -241,8 +260,12 @@ function M.newState()
   return {
     currentRFMD   = nil,
     warnThreshold = nil,
-    stage1 = { condSince = 0, active = false, lastPlay = 0 },
-    stage2 = { condSince = 0, active = false, lastPlay = 0 },
+    stage1 = { condSince = 0, active = false },
+    stage2 = { condSince = 0, active = false },
+    -- announcedStage/lastPlay drive the sound: any CHANGE of the sounding stage
+    -- plays immediately, an unchanged stage repeats on REPEAT_MS.
+    announcedStage = 0,
+    lastPlay       = 0,
     -- linkLostSince marks when telemetry first went away (0 = link present); drives
     -- the brief-gap grace before resetAll().
     linkLostSince  = 0,
@@ -256,14 +279,17 @@ end
 local function resetStage(s)
   s.condSince = 0
   s.active    = false
-  s.lastPlay  = 0
 end
 
+-- Resets the WARN state after a sustained link loss. Deliberately leaves the
+-- cfgErr timers alone: sensor existence (getFieldInfo) is model config and
+-- survives dropouts, so the cfgerr grace must not restart on every loss --
+-- evaluate() clears those timers once the sensors are present again.
 local function resetAll(state)
   state.currentRFMD    = nil
   state.warnThreshold  = nil
-  state.cfgErrSince    = 0
-  state.cfgErrLastPlay = 0
+  state.announcedStage = 0
+  state.lastPlay       = 0
   resetStage(state.stage1)
   resetStage(state.stage2)
 end
@@ -342,15 +368,12 @@ function M.evaluate(state, snap, now)
     result.status = "cfg_error"
     if state.cfgErrSince == 0 then
       state.cfgErrSince = now
-      result.inGrace = true
     elseif (now - state.cfgErrSince) >= M.PARAMS.CFG_ERR_GRACE_MS then
       if state.cfgErrLastPlay == 0
          or (now - state.cfgErrLastPlay) >= M.PARAMS.CFG_ERR_REPEAT_MS then
-        result.playCfgErr      = true
-        state.cfgErrLastPlay   = now
+        result.playCfgErr    = true
+        state.cfgErrLastPlay = now
       end
-    else
-      result.inGrace = true
     end
     return result
   end
@@ -374,36 +397,28 @@ function M.evaluate(state, snap, now)
   local stage1Cond = (linkRssi <= state.warnThreshold)
   local stage2Cond = stage1Cond and (rqly < M.PARAMS.RQLY_THRESHOLD)
 
-  local stage2WasActive = state.stage2.active
   M.debounce(state.stage1, stage1Cond, now)
   M.debounce(state.stage2, stage2Cond, now)
 
-  -- Stage 2 just ended while Stage 1 is still active: force an immediate Stage 1
-  -- play so the transition critical -> warning has no audible gap.
-  if stage2WasActive and not state.stage2.active and state.stage1.active then
-    state.stage1.lastPlay = 0
+  -- Decide which sound to (re)play. Any CHANGE of the sounding stage (up,
+  -- down, or re-entry) plays immediately; an unchanged stage repeats on
+  -- REPEAT_MS. Stage 2 takes precedence over Stage 1.
+  local sounding = state.stage2.active and 2 or (state.stage1.active and 1 or 0)
+  if sounding ~= state.announcedStage then
+    state.announcedStage = sounding
+    state.lastPlay       = 0
+  end
+  if sounding > 0 and
+     (state.lastPlay == 0 or (now - state.lastPlay) >= M.PARAMS.REPEAT_MS) then
+    if sounding == 2 then result.playStage2 = true else result.playStage1 = true end
+    state.lastPlay = now
   end
 
-  -- Decide which sound to (re)play. Stage 2 takes precedence over Stage 1.
-  if state.stage2.active then
-    if state.stage2.lastPlay == 0 or (now - state.stage2.lastPlay) >= M.PARAMS.REPEAT_MS then
-      result.playStage2   = true
-      state.stage2.lastPlay = now
-    end
-  elseif state.stage1.active then
-    if state.stage1.lastPlay == 0 or (now - state.stage1.lastPlay) >= M.PARAMS.REPEAT_MS then
-      result.playStage1   = true
-      state.stage1.lastPlay = now
-    end
-  end
-
-  result.status      = "running"
-  result.stage       = state.stage2.active and 2 or (state.stage1.active and 1 or 0)
-  result.sensLimit   = sensLimit                 -- raw (no offset) -> widget's rangePct
-  result.threshold   = state.warnThreshold       -- sensLimit + offset -> drives the warning
-  result.linkRssi    = linkRssi                  -- governing RSS (stronger antenna) -> range bar
-  result.modeName    = M.MODE_NAMES[rfmd]        -- nil if unknown (widget falls back to number)
-  result.dualAntenna = dual
+  result.status    = "running"
+  result.stage     = sounding
+  result.sensLimit = sensLimit              -- raw (no offset) -> widget's rangePct
+  result.linkRssi  = linkRssi               -- governing RSS (stronger antenna) -> range bar
+  result.modeName  = M.MODE_NAMES[rfmd]     -- nil if unknown (widget falls back to number)
   return result
 end
 

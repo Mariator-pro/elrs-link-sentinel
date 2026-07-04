@@ -32,8 +32,23 @@ local function init_func()
   state = core.newState()
 end
 
+-- pcall: a transient error in core must not halt this script -- it is the only
+-- audio warning path. But it must not stay silent forever either: after
+-- ERROR_LIMIT consecutive failures, sound an alarm and rethrow so EdgeTX stops it.
+local ERROR_LIMIT = 5
+local errorStreak = 0
+
 local function run_func()
-  core.update(state)
+  local ok, err = pcall(core.update, state)
+  if ok then
+    errorStreak = 0
+    return
+  end
+  errorStreak = errorStreak + 1
+  if errorStreak >= ERROR_LIMIT then
+    playTone(1600, 300, 0, PLAY_NOW)
+    error(err)
+  end
 end
 
 return { init = init_func, run = run_func }

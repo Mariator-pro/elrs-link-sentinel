@@ -127,40 +127,48 @@ local FONT_STEPS = { XXLSIZE, DBLSIZE, MIDSIZE, 0, SMLSIZE }
 local SMALLER    = { [XXLSIZE] = DBLSIZE, [DBLSIZE] = MIDSIZE,
                      [MIDSIZE] = 0, [0] = SMLSIZE, [SMLSIZE] = SMLSIZE }
 
+-- Text-metric caches: fonts never change at runtime, so measurements are
+-- session-constant. Height depends only on the font, width on font + text.
+local FONT_H, TEXT_W = {}, {}
+local function fontH(flags)
+  flags = flags or 0
+  local h = FONT_H[flags]
+  if not h then
+    h = select(2, lcd.sizeText("0", flags))
+    FONT_H[flags] = h
+  end
+  return h
+end
+local function textW(text, flags)
+  flags = flags or 0
+  local byFlag = TEXT_W[flags]
+  if not byFlag then byFlag = {}; TEXT_W[flags] = byFlag end
+  local w = byFlag[text]
+  if not w then w = lcd.sizeText(text, flags); byFlag[text] = w end
+  return w
+end
+
 -- Largest font whose text fits in maxW x maxH. Dimension big numbers from
 -- a fixed reference string so "1%" never gets a bigger font than "100%".
-local function fitFont(text, maxW, maxH, extra)
-  extra = extra or 0
+-- maxFont caps the largest step tried (e.g. MIDSIZE for the big percent).
+local function fitFont(text, maxW, maxH, maxFont)
+  local capped = not maxFont
   for _, f in ipairs(FONT_STEPS) do
-    local w, h = lcd.sizeText(text, f + extra)
-    if w <= maxW and (not maxH or h <= maxH) then return f end
+    if f == maxFont then capped = true end
+    if capped and textW(text, f) <= maxW and (not maxH or fontH(f) <= maxH) then return f end
   end
   return SMLSIZE
 end
 
 -- Vertical-center offset for a row, measured against a reference glyph.
 local function vcenter(ry, rh, flags)
-  local _, th = lcd.sizeText("0", flags or 0)
-  return ry + math.floor((rh - th) / 2)
+  return ry + math.floor((rh - fontH(flags or 0)) / 2)
 end
 
--- Draw a sequence of {text,color[,flags]} segments left to right; returns
--- width. A segment may override the row flags (e.g. BOLD for emphasis).
-local function drawSegs(x, y, segs, flags)
-  local cx = x
-  for _, s in ipairs(segs) do
-    local f = s.flags or flags or 0
-    dtext(cx, y, s.text, s.color, f)
-    cx = cx + lcd.sizeText(s.text, f)
-  end
-  return cx - x
-end
-
--- Total pixel width of a segment list (for right-aligned placement).
-local function segsWidth(segs, flags)
-  local w = 0
-  for _, s in ipairs(segs) do w = w + lcd.sizeText(s.text, s.flags or flags or 0) end
-  return w
+-- Muted label followed by its value -- shared by the info rows and captions.
+local function drawKV(x, y, label, value)
+  dtext(x, y, label, COLORS.muted, SMLSIZE)
+  dtext(x + textW(label, SMLSIZE), y, value, COLORS.fg, SMLSIZE)
 end
 
 -- BOLD works for every font EXCEPT the small one: SMLSIZE + BOLD makes EdgeTX
@@ -190,7 +198,7 @@ local function drawSplitText(x, y, text, flags, fillRight, onFill, onTrack)
   local cx = x
   for i = 1, #text do
     local ch = string.sub(text, i, i)
-    local cw = lcd.sizeText(ch, flags)
+    local cw = textW(ch, flags)
     local col = (cx + cw / 2 <= fillRight) and onFill or onTrack
     dtext(cx, y, ch, col, flags)
     cx = cx + cw
@@ -216,8 +224,7 @@ local function buildDisplay(ctx, r)
     tpwr      = snap.tpwr,                            -- nil -> "--"
     fm        = snap.fm,                              -- nil -> "--"
     rqly      = snap.rqly,
-    module    = ctx.module,                           -- CRSF device-info (nil until detected)
-    fw        = ctx.fw,
+    modLine   = ctx.modLine,                          -- CRSF device-info line (nil until detected)
   }
 end
 
@@ -269,8 +276,8 @@ local function crsfReadString(b, from)
   return table.concat(out), i + 1
 end
 
--- Decode a device-info payload into ctx.module / ctx.fw. Accept only frames
--- from the TX module; everything else (e.g. a receiver) is ignored.
+-- Decode a device-info payload into ctx.modLine. Accept only frames from
+-- the TX module; everything else (e.g. a receiver) is ignored.
 local function parseDeviceInfo(ctx, b)
   if not b or b[2] ~= ADDR_TX_MODULE then return end
   local name, p = crsfReadString(b, 3)
@@ -278,8 +285,7 @@ local function parseDeviceInfo(ctx, b)
   -- firmware version is the last three bytes of the software field.
   local maj, min, rev = b[p + 9], b[p + 10], b[p + 11]
   if name ~= "" and maj and min and rev then
-    ctx.module = name
-    ctx.fw     = string.format("%d.%d.%d", maj, min, rev)
+    ctx.modLine = string.format("%s (v%d.%d.%d)", name, maj, min, rev)
   end
 end
 
@@ -292,7 +298,7 @@ local function pollDeviceInfo(ctx)
   if cmd == CRSF_DEVICE_INFO then
     parseDeviceInfo(ctx, data)
   end
-  if not ctx.module then
+  if not ctx.modLine then
     local now = getTime()
     if now - (ctx.lastDevPing or 0) > DEV_PING_PERIOD then
       crossfireTelemetryPush(CRSF_PING, { ADDR_BROADCAST, ADDR_RADIO })
@@ -308,7 +314,7 @@ end
 -- Brand header: brand-coloured square + label, one text line tall (no padding) to stay
 -- compact in tight tiers. Returns its height.
 local function drawHeader(x, y, label)
-  local hdrH = select(2, lcd.sizeText("0", SMLSIZE))
+  local hdrH = fontH(SMLSIZE)
   local sq   = sx(5)
   lcd.drawFilledRectangle(x, y + math.floor((hdrH - sq) / 2), sq, sq, BRAND)
   dtext(x + sq + sx(3), y, label, BRAND, SMLSIZE)
@@ -321,8 +327,8 @@ local NO_RX_BASE = "No RX connected"
 local DOT_PERIOD = 50   -- getTime ticks per dot (~0.5 s)
 local function drawNoRxStatus(cx, y)
   local n      = math.floor(getTime() / DOT_PERIOD) % 4
-  local baseW  = lcd.sizeText(NO_RX_BASE, SMLSIZE)
-  local fullW  = lcd.sizeText(NO_RX_BASE .. "...", SMLSIZE)
+  local baseW  = textW(NO_RX_BASE, SMLSIZE)
+  local fullW  = textW(NO_RX_BASE .. "...", SMLSIZE)
   local startX = cx - math.floor(fullW / 2)
   dtext(startX, y, NO_RX_BASE, COLORS.muted, SMLSIZE)
   if n > 0 then dtext(startX + baseW, y, string.rep(".", n), COLORS.muted, SMLSIZE) end
@@ -341,13 +347,18 @@ end
 -- NO LINK tile: brand title over an animated status line, plus the TX module/FW when
 -- known (available even without an RX link, as it comes from the module). On a zone too
 -- short for the whole block the title is dropped and only the status block stays.
+-- Title font sized to this fixed-width anchor instead of the shorter own title, so
+-- the splash renders at a predictable, stable size. Widen/narrow the count to
+-- shrink/grow the title by a font step.
+local TITLE_SIZE_REF = string.rep("M", 8)
+
 local function drawNoLink(ctx, x0, y0, W, H)
   local title   = "LINK-SENTINEL"
-  local tFlag   = SMALLER[fitFont(title, W * 0.95, H * 0.5)]
-  local _, tH   = lcd.sizeText(title, tFlag)
-  local _, sH   = lcd.sizeText(NO_RX_BASE, SMLSIZE)
+  local tFlag   = SMALLER[fitFont(TITLE_SIZE_REF, W * 0.95, H * 0.5)]
+  local tH      = fontH(tFlag)
+  local sH      = fontH(SMLSIZE)
   local gap     = sx(4)
-  local modLine = ctx.module and (ctx.module .. " (v" .. ctx.fw .. ")") or nil
+  local modLine = ctx.modLine
   local modH    = modLine and (sx(2) + sH) or 0
   local cx      = x0 + math.floor(W / 2)
 
@@ -374,12 +385,11 @@ local function drawCenteredLines(z, lines, color, topY, font)
   color = color or COLORS.fg
   topY = topY or 0
   font = font or SMLSIZE
-  local _, th  = lcd.sizeText("0", font)
-  local lineH  = th + sx(3)
+  local lineH  = fontH(font) + sx(3)
   local startY = topY + math.floor(((z.h - topY) - #lines * lineH) / 2)
   if startY < topY then startY = topY end
   for i, t in ipairs(lines) do
-    local tw = lcd.sizeText(t, font)
+    local tw = textW(t, font)
     dtext(math.floor((z.w - tw) / 2), startY + (i - 1) * lineH, t, color, font)
   end
 end
@@ -409,8 +419,7 @@ end
 -- Header-band height of the brand heading (pad + the taller of text / eyes), so
 -- callers can reserve it before drawing and decide whether it still fits.
 local function brandHeadingH()
-  local _, hh = lcd.sizeText("LINK-SENTINEL", SMLSIZE)
-  return sx(4) + math.max(hh, sx(14))
+  return sx(4) + math.max(fontH(SMLSIZE), sx(14))
 end
 
 -- Brand heading with the eyes beside it (eyes dropped if the zone is too narrow).
@@ -418,7 +427,7 @@ end
 local function drawBrandHeading(z)
   local pad = sx(4)
   dtext(pad, pad, "LINK-SENTINEL", BRAND, SMLSIZE)
-  local hw, hh   = lcd.sizeText("LINK-SENTINEL", SMLSIZE)
+  local hw, hh   = textW("LINK-SENTINEL", SMLSIZE), fontH(SMLSIZE)
   local eyeX, eyeW = pad + hw + sx(6), sx(20)
   if eyeX + eyeW <= z.w then
     drawMascotEyes(eyeX, pad, eyeW, math.max(hh, sx(14)))
@@ -432,8 +441,8 @@ end
 local function drawErrorTile(z, line1, line2)
   local lines = { line1, line2 }
   local hb    = brandHeadingH()
-  local stdH  = select(2, lcd.sizeText("0", 0)) + sx(3)
-  local smlH  = select(2, lcd.sizeText("0", SMLSIZE)) + sx(3)
+  local stdH  = fontH(0) + sx(3)
+  local smlH  = fontH(SMLSIZE) + sx(3)
   if z.h - hb >= 2 * stdH then          -- header + standard-size message
     drawBrandHeading(z)
     drawCenteredLines(z, lines, nil, hb, 0)
@@ -456,8 +465,7 @@ local function drawRangeBar(x, y, w, barH, d, sc)
   local p     = (d.range == nil) and 100 or math.min(100, math.max(0, d.range))
   local fillW = math.floor(w * p / 100)
   lcd.drawFilledRectangle(x, y, fillW, barH, sc)
-  local _, smlH = lcd.sizeText("0", SMLSIZE)
-  if barH < smlH - sx(5) then return end
+  if barH < fontH(SMLSIZE) - sx(5) then return end
   local statusTxt = (d.stage >= 2 and "CRITICAL")
                  or (d.stage >= 1 and "WARNING") or "OK"
   local stFlag = fitFont(statusTxt, w * 0.6, barH - sx(2))
@@ -465,20 +473,90 @@ local function drawRangeBar(x, y, w, barH, d, sc)
                 stFlag + bold(stFlag), x + fillW, textOnStage(d.stage), COLORS.fg)
 end
 
+-- Header label: module line once CRSF device-info arrived, brand until then.
+local function headerLabel(d)
+  return d.modLine or "LINK-SENTINEL"
+end
+
+-- Info-grid column x-positions, sized to each column's widest content so values
+-- never collide: col 1 = RSS (wider than TX below it), col 2 = the narrow ANT/FM,
+-- col 3 = the rest.
+local function gridCols(x0, W)
+  local gap = sx(4)
+  local c1x = x0
+  local c2x = c1x + textW("RSS -000 dBm", SMLSIZE) + gap
+  local c3x = c2x + textW("FM Angle?", SMLSIZE) + gap
+  return c1x, c2x, c3x, (x0 + W) - c3x
+end
+
+-- LQ mini bar, colour by quality: green at/above LQ_OK_PCT, yellow down to the
+-- shared core threshold (not hard-coded), red below.
+local LQ_BAR_H = sx(6)
+local function drawLqBar(x, y, w, rqly)
+  lcd.drawFilledRectangle(x, y, w, LQ_BAR_H, COLORS.track)
+  local rq    = math.min(100, math.max(0, rqly))
+  local rqCol = (rq >= LQ_OK_PCT and COLORS.accent)
+             or (rq >= core.PARAMS.RQLY_THRESHOLD and WARN_COL) or CRIT_COL
+  lcd.drawFilledRectangle(x, y, math.floor(w * rq / 100), LQ_BAR_H, rqCol)
+end
+
+-- Info row 1: RSS / ANT / LQ. The LQ "%" unit is dropped on a narrow zone so the
+-- number never clips; measured against "100 %" so it does not flicker as LQ
+-- changes. Returns the columns so the grid reuses them for row 2.
+local function drawInfoRow1(x0, W, y, d)
+  local c1x, c2x, c3x, col3 = gridCols(x0, W)
+  drawKV(c1x, y, "RSS ", d.rssActive .. " dBm")
+  drawKV(c2x, y, "ANT ", tostring(d.antNum))
+  local lqUnit = (textW("LQ 100 %", SMLSIZE) <= col3) and " %" or ""
+  drawKV(c3x, y, "LQ ", d.rqly .. lqUnit)
+  return c1x, c2x, c3x, col3
+end
+
+-- Full info grid (2 rows x 3 cols): RSS/TX, ANT/FM, LQ/mini bar. r1y/r2y are the
+-- text rows, barY the mini-bar top.
+local function drawInfoGrid(x0, W, r1y, r2y, barY, d)
+  local c1x, c2x, c3x, col3 = drawInfoRow1(x0, W, r1y, d)
+  drawKV(c1x, r2y, "TX ", d.tpwr and (d.tpwr .. " mW") or "--")
+  drawKV(c2x, r2y, "FM ", d.fm or "--")
+  drawLqBar(c3x, barY, col3 - sx(2), d.rqly)
+end
+
+-- Caption on the percent baseline: "MODE <rfmode>" right-aligned (priority), the
+-- label after the percent degrading RANGELIMIT -> RANGE -> dropped as the row
+-- tightens (e.g. a three-digit percent), so it never collides with MODE.
+local function drawPctCaption(x0, W, pctBottom, labelX, d)
+  local capY  = pctBottom - fontH(SMLSIZE)
+  local modeX = (x0 + W) - (textW("MODE ", SMLSIZE) + textW(d.rfmode, SMLSIZE))
+  drawKV(modeX, capY, "MODE ", d.rfmode)
+  local avail = modeX - sx(4) - labelX
+  local lbl   = "RANGELIMIT"
+  if textW(lbl, SMLSIZE) > avail then lbl = "RANGE" end
+  if textW(lbl, SMLSIZE) > avail then lbl = nil end
+  if lbl then dtext(labelX, capY, lbl, COLORS.muted, SMLSIZE) end
+end
+
+-- Percent row for MEDIUM/SMALL: "value %" one size, caption on its baseline.
+-- Returns the y just below the percent -- the top of the bar slot.
+local function drawPctRow(x0, W, top, maxH, d, sc)
+  local pctTxt  = ((d.range == nil) and "--" or tostring(math.floor(d.range + 0.5))) .. " %"
+  local numFlag = fitFont("100 %", W * 0.5, maxH, MIDSIZE)
+  dtext(x0, top, pctTxt, sc, numFlag)
+  local pctBottom = top + fontH(numFlag)
+  drawPctCaption(x0, W, pctBottom, x0 + textW(pctTxt, numFlag) + sx(6), d)
+  return pctBottom
+end
+
 -- FULL tier: header, range block (big % + bar + status) and the 2x3 info grid.
 -- For large/half-page zones (roughly a quarter page and up).
-local function drawMainFull(z, W, H, x0, y0, d)
-  local sc = stageColor(d.stage)
-
-  -- Header: brand square + module/FW (brand placeholder until CRSF device-info).
-  local hdrLabel = d.module and (d.module .. " (v" .. d.fw .. ")") or "LINK-SENTINEL"
-  local hdrH     = drawHeader(x0, y0, hdrLabel)
+local function drawMainFull(W, H, x0, y0, d)
+  local sc   = stageColor(d.stage)
+  local hdrH = drawHeader(x0, y0, headerLabel(d))
 
   -- Below the header: range block, a gap, then 2 info rows. Each row is at least one
   -- line tall so the rows never crowd up into the bar on a short zone.
   local top      = y0 + hdrH + sx(1)
   local rest     = (y0 + H) - top
-  local _, smlH  = lcd.sizeText("0", SMLSIZE)
+  local smlH     = fontH(SMLSIZE)
   local infoGap  = sx(3)
   local hInfoRow = math.max(math.floor(rest * 0.20), smlH)
   local hInfo    = hInfoRow * 2
@@ -487,112 +565,46 @@ local function drawMainFull(z, W, H, x0, y0, d)
   -- ===== RANGE BLOCK =====
   -- Bar takes ~42% of the block, capped so the band above always fits a MIDSIZE number
   -- (the % then reads at value size instead of dropping a font step on a tight zone).
-  local _, midNumH = lcd.sizeText("0", MIDSIZE)
   local barH    = math.max(sx(10),
-                           math.min(math.floor(hRange * 0.42), hRange - midNumH - sx(3)))
+                           math.min(math.floor(hRange * 0.42), hRange - fontH(MIDSIZE) - sx(3)))
   local barY    = top + hRange - barH
   local bandBot = barY - sx(1)
   local bandH   = bandBot - top
 
-  -- Big percent, LEFT, value + smaller unit. Capped at MIDSIZE, shrunk only if it would
-  -- not fit; sized from a fixed "100" reference so "1%" never dwarfs "100%". d.range is
-  -- nil for an unknown mode -> show "--" and a full bar in the warning colour.
-  local unknownMode = (d.range == nil)
-  local pctTxt   = unknownMode and "--" or tostring(math.floor(d.range + 0.5))
-  local numFlag  = MIDSIZE
-  while numFlag ~= SMLSIZE and
-        (lcd.sizeText("100", numFlag) > W * 0.5 or
-         select(2, lcd.sizeText("100", numFlag)) > bandH) do
-    numFlag = SMALLER[numFlag]
-  end
+  -- Big percent, LEFT, value + smaller unit ("100" reference: the % is drawn
+  -- separately here). d.range is nil for an unknown mode -> show "--" and a
+  -- full bar in the warning colour.
+  local pctTxt   = (d.range == nil) and "--" or tostring(math.floor(d.range + 0.5))
+  local numFlag  = fitFont("100", W * 0.5, bandH, MIDSIZE)
   local unitFlag = SMALLER[numFlag]
-  local nW, nH   = lcd.sizeText(pctTxt, numFlag)
-  local uW, uH   = lcd.sizeText("%", unitFlag)
+  local nW, nH   = textW(pctTxt, numFlag), fontH(numFlag)
+  local uW, uH   = textW("%", unitFlag), fontH(unitFlag)
   local uGap     = sx(3)   -- space between value and unit
   -- Percent anchored to the TOP of the band so the gap to the header stays constant
   -- regardless of zone height; spare space sits between the percent row and the bar.
   local pctBottom = top + nH
   dtext(x0, top, pctTxt, sc, numFlag)   -- colored by stage, like the bar fill
   dtext(x0 + nW + uGap, pctBottom - uH, "%", sc, unitFlag)
-
-  -- Percent baseline: RANGELIMIT label after the %, "MODE <rfmode>" right-aligned. MODE
-  -- has priority -- the label degrades RANGELIMIT -> RANGE -> dropped as the row tightens
-  -- (e.g. a three-digit percent), so it never collides with MODE.
-  local capH = select(2, lcd.sizeText("RANGE", SMLSIZE))
-  local capY = pctBottom - capH
-  local modeSegs = {
-    { text = "MODE ",  color = COLORS.muted },
-    { text = d.rfmode, color = COLORS.fg },
-  }
-  local modeX  = (x0 + W) - segsWidth(modeSegs, SMLSIZE)
-  drawSegs(modeX, capY, modeSegs, SMLSIZE)
-  local labelX = x0 + nW + uGap + uW + sx(6)
-  local avail  = modeX - sx(4) - labelX
-  local lbl    = "RANGELIMIT"
-  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = "RANGE" end
-  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = nil end
-  if lbl then dtext(labelX, capY, lbl, COLORS.muted, SMLSIZE) end
+  drawPctCaption(x0, W, pctBottom, x0 + nW + uGap + uW + sx(6), d)
 
   -- fill bar: length = range %, color = stage; status word two-tone inside it
   drawRangeBar(x0, barY, W, barH, d, sc)
 
   -- ===== INFO GRID (2 rows x 3 cols) =====
-  -- col1: RSS(active) / ANT   col2: TX / FM   col3: LQ / mini bar
-  local gy   = top + hRange + infoGap
-  -- Column x-positions sized to each column's widest content so values never collide:
-  -- col 1 = RSS (wider than TX below it), col 2 = the narrow ANT/FM, col 3 = the rest.
-  local gap  = sx(4)
-  local c1x  = x0
-  local c2x  = c1x + lcd.sizeText("RSS -000 dBm", SMLSIZE) + gap
-  local c3x  = c2x + lcd.sizeText("FM Angle?", SMLSIZE) + gap
-  local col3 = (x0 + W) - c3x
+  local gy  = top + hRange + infoGap
   local r1y = vcenter(gy, hInfoRow, SMLSIZE)
   local r2y = vcenter(gy + hInfoRow, hInfoRow, SMLSIZE)
-
-  -- Col 1: active-antenna RSS (row 1) / TX power (row 2).
-  drawSegs(c1x, r1y, {
-    { text = "RSS ",                color = COLORS.muted },
-    { text = tostring(d.rssActive), color = COLORS.fg },
-    { text = " dBm",                color = COLORS.fg },
-  }, SMLSIZE)
-  drawSegs(c1x, r2y, {
-    { text = "TX ", color = COLORS.muted },
-    { text = d.tpwr and (d.tpwr .. " mW") or "--", color = COLORS.fg },
-  }, SMLSIZE)
-
-  -- Col 2: active antenna number (row 1) / FC flight mode (row 2).
-  drawSegs(c2x, r1y, {
-    { text = "ANT ",             color = COLORS.muted },
-    { text = tostring(d.antNum), color = COLORS.fg },
-  }, SMLSIZE)
-  drawSegs(c2x, r2y, {
-    { text = "FM ",        color = COLORS.muted },
-    { text = d.fm or "--", color = COLORS.fg },
-  }, SMLSIZE)
-
-  -- Col 3: LQ number (row 1) / mini bar (row 2), bar color by quality
-  drawSegs(c3x, r1y, {
-    { text = "LQ ",          color = COLORS.muted },
-    { text = d.rqly .. " %", color = COLORS.fg },
-  }, SMLSIZE)
-  local mbH = sx(6)
-  local mbY = (gy + hInfoRow) + math.floor((hInfoRow - mbH) / 2)
-  local mbW = col3 - sx(2)
-  lcd.drawFilledRectangle(c3x, mbY, mbW, mbH, COLORS.track)
-  local rq     = math.min(100, math.max(0, d.rqly))
-  local critLQ = core.PARAMS.RQLY_THRESHOLD       -- shared threshold, not hard-coded
-  local rqCol  = (rq >= LQ_OK_PCT and COLORS.accent) or (rq >= critLQ and WARN_COL) or CRIT_COL
-  lcd.drawFilledRectangle(c3x, mbY, math.floor(mbW * rq / 100), mbH, rqCol)
+  local mbY = (gy + hInfoRow) + math.floor((hInfoRow - LQ_BAR_H) / 2)
+  drawInfoGrid(x0, W, r1y, r2y, mbY, d)
 end
 
 -- MEDIUM tier: same design language as FULL (header, big %, MODE, status bar) plus the
 -- info grid, for mid-size zones where FULL's range block would not fit.
-local function drawMainMedium(z, W, H, x0, y0, d)
-  local sc       = stageColor(d.stage)
-  local hdrLabel = d.module and (d.module .. " (v" .. d.fw .. ")") or "LINK-SENTINEL"
-  drawHeader(x0, y0, hdrLabel)
+local function drawMainMedium(W, H, x0, y0, d)
+  local sc = stageColor(d.stage)
+  drawHeader(x0, y0, headerLabel(d))
 
-  local _, smlH = lcd.sizeText("0", SMLSIZE)
+  local smlH = fontH(SMLSIZE)
   -- Rows evenly spread at span/4 (header = line 0): line 1 = %, line 2 = status bar,
   -- lines 3+4 = info rows. On a short zone the pitch is floored so the last row sits at
   -- the bottom pad instead of leaving a larger gap.
@@ -600,83 +612,20 @@ local function drawMainMedium(z, W, H, x0, y0, d)
   local minSpan = 4 * (smlH - sx(4))
   if span < minSpan then span = minSpan end
   local function rowY(i) return y0 + math.floor(i * span / 4 + 0.5) end
-  local top     = rowY(1)
-
-  -- Info grid (3 cols x 2 rows) like FULL, on lines 3 and 4.
+  local top   = rowY(1)
   local row1Y = rowY(3)
   local row2Y = rowY(4)
-  local gap   = sx(4)
-  local c1x   = x0
-  local c2x   = c1x + lcd.sizeText("RSS -000 dBm", SMLSIZE) + gap
-  local c3x   = c2x + lcd.sizeText("FM Angle?", SMLSIZE) + gap
-  local col3  = (x0 + W) - c3x
-  -- Col 1: RSS (line 3) / TX (line 4)
-  drawSegs(c1x, row1Y, {
-    { text = "RSS ", color = COLORS.muted }, { text = tostring(d.rssActive), color = COLORS.fg },
-    { text = " dBm", color = COLORS.fg },
-  }, SMLSIZE)
-  drawSegs(c1x, row2Y, {
-    { text = "TX ", color = COLORS.muted },
-    { text = d.tpwr and (d.tpwr .. " mW") or "--", color = COLORS.fg },
-  }, SMLSIZE)
-  -- Col 2: ANT (line 3) / FM (line 4)
-  drawSegs(c2x, row1Y, {
-    { text = "ANT ", color = COLORS.muted }, { text = tostring(d.antNum), color = COLORS.fg },
-  }, SMLSIZE)
-  drawSegs(c2x, row2Y, {
-    { text = "FM ", color = COLORS.muted }, { text = d.fm or "--", color = COLORS.fg },
-  }, SMLSIZE)
-  -- Col 3: LQ number (line 3) / mini bar (line 4), bar colour by quality. The "%" unit
-  -- is dropped on a narrow zone so the number never clips; measured against "100 %" so
-  -- it does not flicker as LQ changes.
-  local lqUnit = (lcd.sizeText("LQ 100 %", SMLSIZE) <= col3) and " %" or ""
-  drawSegs(c3x, row1Y, {
-    { text = "LQ ", color = COLORS.muted }, { text = d.rqly .. lqUnit, color = COLORS.fg },
-  }, SMLSIZE)
-  local mbH = sx(6)
-  local mbY = row2Y + math.floor((smlH - mbH) / 2)
-  local mbW = col3 - sx(2)
-  lcd.drawFilledRectangle(c3x, mbY, mbW, mbH, COLORS.track)
-  local rq     = math.min(100, math.max(0, d.rqly))
-  local critLQ = core.PARAMS.RQLY_THRESHOLD       -- shared threshold, not hard-coded
-  local rqCol  = (rq >= LQ_OK_PCT and COLORS.accent) or (rq >= critLQ and WARN_COL) or CRIT_COL
-  lcd.drawFilledRectangle(c3x, mbY, math.floor(mbW * rq / 100), mbH, rqCol)
+
+  -- Info grid (3 cols x 2 rows) like FULL, on lines 3 and 4.
+  drawInfoGrid(x0, W, row1Y, row2Y, row2Y + math.floor((smlH - LQ_BAR_H) / 2), d)
 
   -- Percent (big, left) as "value %", value and unit the same size (unlike FULL's
-  -- smaller unit). Sized from a fixed "100 %" reference so "1 %" never dwarfs "100 %".
-  local unknownMode = (d.range == nil)
-  local pctTxt      = (unknownMode and "--" or tostring(math.floor(d.range + 0.5))) .. " %"
-  local pctMaxH     = math.floor((row1Y - sx(2) - top) * 0.5)
-  local numFlag     = MIDSIZE
-  while numFlag ~= SMLSIZE and
-        (lcd.sizeText("100 %", numFlag) > W * 0.5 or
-         select(2, lcd.sizeText("100 %", numFlag)) > pctMaxH) do
-    numFlag = SMALLER[numFlag]
-  end
-  local nW, nH    = lcd.sizeText(pctTxt, numFlag)
-  local pctBottom = top + nH
-  dtext(x0, top, pctTxt, sc, numFlag)
-
-  -- RANGELIMIT after the %, MODE right-aligned, same degradation as FULL.
-  local capH = select(2, lcd.sizeText("RANGE", SMLSIZE))
-  local capY = pctBottom - capH
-  local modeSegs = {
-    { text = "MODE ",  color = COLORS.muted },
-    { text = d.rfmode, color = COLORS.fg },
-  }
-  local modeX  = (x0 + W) - segsWidth(modeSegs, SMLSIZE)
-  drawSegs(modeX, capY, modeSegs, SMLSIZE)
-  local labelX = x0 + nW + sx(6)
-  local avail  = modeX - sx(4) - labelX
-  local lbl    = "RANGELIMIT"
-  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = "RANGE" end
-  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = nil end
-  if lbl then dtext(labelX, capY, lbl, COLORS.muted, SMLSIZE) end
+  -- smaller unit), caption on its baseline.
+  local pctMaxH = math.floor((row1Y - sx(2) - top) * 0.5)
+  local barTop  = drawPctRow(x0, W, top, pctMaxH, d, sc)
 
   -- Range bar fills the line-2 slot between the percent row and the first info row.
-  local barTop = top + nH
-  local barBot = row1Y - sx(1)
-  local barH   = math.max(sx(8), barBot - barTop)
+  local barH = math.max(sx(8), (row1Y - sx(1)) - barTop)
   drawRangeBar(x0, barTop, W, barH, d, sc)
 end
 
@@ -686,29 +635,26 @@ end
 --   <= 1 row  : just the large range % filling the whole zone
 -- The % is stage-coloured, so the colour still carries the stage once the word and bar
 -- are dropped.
-local function drawMainSmall(z, W, H, x0, y0, d)
-  local sc      = stageColor(d.stage)
-  local _, smlH = lcd.sizeText("0", SMLSIZE)
-  local gap     = sx(1)
-  local nRows   = math.floor((H + gap) / (smlH + gap))   -- full-height rows that fit
-  local pctBig  = (d.range == nil) and "-- %" or (tostring(math.floor(d.range + 0.5)) .. " %")
+local function drawMainSmall(W, H, x0, y0, d)
+  local sc    = stageColor(d.stage)
+  local smlH  = fontH(SMLSIZE)
+  local gap   = sx(1)
+  local nRows = math.floor((H + gap) / (smlH + gap))   -- full-height rows that fit
 
-  -- One line or less: a single large stage-coloured % centred in the zone.
-  if nRows <= 1 then
-    local pFlag = fitFont(pctBig, W, H)
-    local _, ph = lcd.sizeText(pctBig, pFlag)
-    dtext(x0, y0 + math.floor((H - ph) / 2), pctBig, sc, pFlag)
-    return
-  end
-
-  -- Two lines: header + a large left-aligned range % filling the space below it.
-  if nRows == 2 then
-    drawHeader(x0, y0, d.module and (d.module .. " (v" .. d.fw .. ")") or "LINK-SENTINEL")
-    local restTop = y0 + smlH + gap
-    local rest    = (y0 + H) - restTop
-    local pFlag   = fitFont(pctBig, W, rest)
-    local _, ph   = lcd.sizeText(pctBig, pFlag)
-    dtext(x0, restTop + math.floor((rest - ph) / 2), pctBig, sc, pFlag)
+  -- 1-2 lines: one large stage-coloured % (plus the header when a 2nd line
+  -- fits); pctBig is only needed on these two paths.
+  if nRows <= 2 then
+    local pctBig = (d.range == nil) and "-- %" or (tostring(math.floor(d.range + 0.5)) .. " %")
+    if nRows <= 1 then
+      local pFlag = fitFont(pctBig, W, H)
+      dtext(x0, y0 + math.floor((H - fontH(pFlag)) / 2), pctBig, sc, pFlag)
+    else
+      drawHeader(x0, y0, headerLabel(d))
+      local restTop = y0 + smlH + gap
+      local rest    = (y0 + H) - restTop
+      local pFlag   = fitFont(pctBig, W, rest)
+      dtext(x0, restTop + math.floor((rest - fontH(pFlag)) / 2), pctBig, sc, pFlag)
+    end
     return
   end
 
@@ -718,60 +664,17 @@ local function drawMainSmall(z, W, H, x0, y0, d)
   local span    = H - smlH
   local function rowY(i) return y0 + math.floor(i * span / divisor + 0.5) end
 
-  drawHeader(x0, y0, d.module and (d.module .. " (v" .. d.fw .. ")") or "LINK-SENTINEL")
+  drawHeader(x0, y0, headerLabel(d))
   local top   = rowY(1)
   local infoY = (nInfo >= 1) and rowY(3) or nil
+  if infoY then drawInfoRow1(x0, W, infoY, d) end
 
-  -- Info row 1 (RSS / ANT / LQ), 3 columns, only when it fits.
-  local gap  = sx(4)
-  local c1x  = x0
-  local c2x  = c1x + lcd.sizeText("RSS -000 dBm", SMLSIZE) + gap
-  local c3x  = c2x + lcd.sizeText("FM Angle?", SMLSIZE) + gap
-  local col3 = (x0 + W) - c3x
-  if infoY then
-    drawSegs(c1x, infoY, {
-      { text = "RSS ", color = COLORS.muted }, { text = tostring(d.rssActive), color = COLORS.fg },
-      { text = " dBm", color = COLORS.fg },
-    }, SMLSIZE)
-    drawSegs(c2x, infoY, {
-      { text = "ANT ", color = COLORS.muted }, { text = tostring(d.antNum), color = COLORS.fg },
-    }, SMLSIZE)
-    local lqUnit = (lcd.sizeText("LQ 100 %", SMLSIZE) <= col3) and " %" or ""
-    drawSegs(c3x, infoY, {
-      { text = "LQ ", color = COLORS.muted }, { text = d.rqly .. lqUnit, color = COLORS.fg },
-    }, SMLSIZE)
-  end
-
-  -- % (left) as "value %", RANGELIMIT and MODE right-aligned, like MEDIUM.
-  local pctTxt   = ((d.range == nil) and "--" or tostring(math.floor(d.range + 0.5))) .. " %"
-  local pctMaxH  = math.floor(((infoY or (y0 + H)) - sx(2) - top) * 0.5)
-  local numFlag  = MIDSIZE
-  while numFlag ~= SMLSIZE and
-        (lcd.sizeText("100 %", numFlag) > W * 0.5 or
-         select(2, lcd.sizeText("100 %", numFlag)) > pctMaxH) do
-    numFlag = SMALLER[numFlag]
-  end
-  local nW, nH    = lcd.sizeText(pctTxt, numFlag)
-  local pctBottom = top + nH
-  dtext(x0, top, pctTxt, sc, numFlag)
-  local capH = select(2, lcd.sizeText("RANGE", SMLSIZE))
-  local capY = pctBottom - capH
-  local modeSegs = {
-    { text = "MODE ",  color = COLORS.muted },
-    { text = d.rfmode, color = COLORS.fg },
-  }
-  local modeX  = (x0 + W) - segsWidth(modeSegs, SMLSIZE)
-  drawSegs(modeX, capY, modeSegs, SMLSIZE)
-  local labelX = x0 + nW + sx(6)
-  local avail  = modeX - sx(4) - labelX
-  local lbl    = "RANGELIMIT"
-  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = "RANGE" end
-  if lcd.sizeText(lbl, SMLSIZE) > avail then lbl = nil end
-  if lbl then dtext(labelX, capY, lbl, COLORS.muted, SMLSIZE) end
+  -- % (left) as "value %", RANGELIMIT and MODE on its baseline, like MEDIUM.
+  local pctMaxH = math.floor(((infoY or (y0 + H)) - sx(2) - top) * 0.5)
+  local barTop  = drawPctRow(x0, W, top, pctMaxH, d, sc)
 
   -- Range bar between the % row and the info row, or down to the bottom when there is
   -- no info row below it.
-  local barTop = top + nH
   local barBot = (infoY and (infoY - sx(1))) or (y0 + H)
   local barH   = math.max(sx(8), barBot - barTop)
   drawRangeBar(x0, barTop, W, barH, d, sc)
@@ -781,16 +684,15 @@ end
 -- (only positions do); measuring the real font metrics makes this self-tuning across
 -- radios. The height stack mirrors drawMainFull: header + gap, range block, 2 info rows.
 local function mainFitsFull(W, H)
-  local gap     = sx(4)
-  local gridW   = lcd.sizeText("RSS -000 dBm", SMLSIZE) + gap
-                + lcd.sizeText("FM Angle?", SMLSIZE) + gap
-                + lcd.sizeText("LQ 100 %", SMLSIZE) + sx(2)
-  local _, smlH = lcd.sizeText("0", SMLSIZE)
-  local _, midH = lcd.sizeText("0", MIDSIZE)
-  local hdrH    = smlH                      -- compact header (one text line, no padding)
-  local needH   = hdrH + sx(1)              -- header + gap to content (drawMainFull's top)
-                + midH + sx(1) + sx(12)     -- range block: percent band + gap + min bar
-                + sx(3) + 2 * smlH          -- infoGap + two info rows
+  local gap   = sx(4)
+  local gridW = textW("RSS -000 dBm", SMLSIZE) + gap
+              + textW("FM Angle?", SMLSIZE) + gap
+              + textW("LQ 100 %", SMLSIZE) + sx(2)
+  local smlH  = fontH(SMLSIZE)
+  local hdrH  = smlH                            -- compact header (one text line, no padding)
+  local needH = hdrH + sx(1)                    -- header + gap to content (drawMainFull's top)
+              + fontH(MIDSIZE) + sx(1) + sx(12) -- range block: percent band + gap + min bar
+              + sx(3) + 2 * smlH                -- infoGap + two info rows
   return W >= gridW - TIER_TOL and H >= needH - TIER_TOL
 end
 
@@ -798,20 +700,20 @@ end
 -- MEDIUM as long as that pitch holds a compressed (smlH - sx(5)); below that it drops to
 -- SMALL. Width: the widest left/right pair must fit side by side.
 local function mainFitsMedium(W, H)
-  local _, smlH = lcd.sizeText("0", SMLSIZE)
-  local needH   = smlH + 4 * (smlH - sx(5))   -- header + four rows at a compressed pitch
-  local needW   = lcd.sizeText("RSS -000 dBm", SMLSIZE) + sx(8)
-                + lcd.sizeText("MODE 150Hz", SMLSIZE)
+  local smlH  = fontH(SMLSIZE)
+  local needH = smlH + 4 * (smlH - sx(5))   -- header + four rows at a compressed pitch
+  local needW = textW("RSS -000 dBm", SMLSIZE) + sx(8)
+              + textW("MODE 150Hz", SMLSIZE)
   return W >= needW - TIER_TOL and H >= needH - TIER_TOL
 end
 
-local function drawMain(z, W, H, x0, y0, d)
+local function drawMain(W, H, x0, y0, d)
   if mainFitsFull(W, H) then
-    drawMainFull(z, W, H, x0, y0, d)
+    drawMainFull(W, H, x0, y0, d)
   elseif mainFitsMedium(W, H) then
-    drawMainMedium(z, W, H, x0, y0, d)
+    drawMainMedium(W, H, x0, y0, d)
   else
-    drawMainSmall(z, W, H, x0, y0, d)
+    drawMainSmall(W, H, x0, y0, d)
   end
 end
 
@@ -922,7 +824,7 @@ local function refresh(ctx, event, touchState)
     local target = rangeTarget(d.linkRssi, d.sensLimit)
     smoothRange(ctx, target)
     d.range = (target == nil) and nil or ctx.rangeSmoothed
-    drawMain(z, W, H, x0, y0, d)
+    drawMain(W, H, x0, y0, d)
   end)
   if not ok then
     dtext(4, 4, "Widget error", COLORS.muted, SMLSIZE)
@@ -940,7 +842,7 @@ return {
   options    = {
     -- Theme dropdown (CHOICE labels are a nested table; the value is the 1-based
     -- index, so default 1 = "Dark"; needs EdgeTX 2.11+). Transparency = milky overlay
-    -- 0–5 (default 2), applied in the Light theme only (Dark stays solid black).
+    -- 0-5 (default 2), applied in the Light theme only (Dark stays solid black).
     { "Theme", CHOICE, 1, { "Dark", "Light" } },
     { "Transparency", VALUE, 2, 0, 5 },
     -- Brand/heading colour. Accent: 1 Default (per-palette green), 2 Theme

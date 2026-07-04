@@ -48,28 +48,43 @@ do
   end
 end
 
+-- Config path + schema version from core (the READER) when present, so a bump
+-- there can never leave this tool writing configs core silently rejects.
+SCHEMA_VERSION = (core and core.CONFIG_SCHEMA_VERSION) or SCHEMA_VERSION
+PATHS.config   = (core and core.CONFIG_PATH) or PATHS.config
+
 local LIMITS = (core and core.LIMITS) or {
-  WARN_OFFSET_DB = { min = 10, max = 30 },
-  RQLY_THRESHOLD = { min = 30, max = 70 },
+  WARN_OFFSET_DB  = { min = 10, max = 30 },
+  RQLY_THRESHOLD  = { min = 30, max = 70 },
+  HAPTIC_STRENGTH = { min = 1,  max = 3 },
 }
-local DEF_OFFSET     = (core and core.PARAMS and core.PARAMS.WARN_OFFSET_DB) or 10
-local DEF_RQLY       = (core and core.PARAMS and core.PARAMS.RQLY_THRESHOLD) or 42
+-- Factory defaults from core.DEFAULTS, NOT from core.PARAMS: PARAMS is already
+-- overlaid with the saved config when the tool loads core, so reading it would
+-- turn "Reset to defaults" into a no-op.
+local DEF        = (core and core.DEFAULTS) or {}
+local DEF_OFFSET = DEF.warnOffsetDb or 10
+local DEF_RQLY   = DEF.rqlyThreshold or 42
 -- Haptic feedback: on/off plus a 1..3 strength tier. Defaults and pulse lengths
 -- come from core when present so the Test button previews the exact buzz a real
 -- warning fires; labels are the user-facing tier names.
+local HLIM = LIMITS.HAPTIC_STRENGTH or { min = 1, max = 3 }
 local HAPTIC = {
-  min       = 1, max = 3,
-  default   = (core and core.PARAMS and core.PARAMS.HAPTIC_STRENGTH) or 2,
-  defaultOn = (core and core.PARAMS and core.PARAMS.HAPTIC) == true,
+  min       = HLIM.min, max = HLIM.max,
+  default   = DEF.hapticStrength or 2,
+  defaultOn = DEF.haptic == true,
   labels    = { "Soft", "Normal", "Strong" },
   dur       = (core and core.HAPTIC_DUR) or { 15, 30, 50 },
 }
 
--- A config's strength, clamped to range and defaulted when missing/garbage.
+-- A config's strength, mirroring core's runtime rule so the editor shows the
+-- tier a real warning fires: integer values clamp to the range; anything else
+-- lands on the "Normal" tier.
 function HAPTIC.strengthOf(cfg)
   local hs = cfg.hapticStrength
-  if type(hs) == "number" and hs >= HAPTIC.min and hs <= HAPTIC.max then return hs end
-  return HAPTIC.default
+  if type(hs) ~= "number" or hs % 1 ~= 0 then return HAPTIC.default end
+  if hs < HAPTIC.min then return HAPTIC.min end
+  if hs > HAPTIC.max then return HAPTIC.max end
+  return hs
 end
 
 -- Buzz alongside a Test preview, mirroring the warning cue: pulses=1 for Stage 1,
@@ -84,8 +99,8 @@ function HAPTIC.test(on, strength, pulses)
     playHaptic(dur, (i < pulses) and dur or 0)   -- gap between pulses, none after the last
   end
 end
-PATHS.s1Default  = (core and core.SOUNDS and core.SOUNDS.stage1) or (PATHS.soundDir .. "stage1.wav")
-PATHS.s2Default  = (core and core.SOUNDS and core.SOUNDS.stage2) or (PATHS.soundDir .. "stage2.wav")
+PATHS.s1Default  = DEF.stage1Sound or (PATHS.soundDir .. "stage1.wav")
+PATHS.s2Default  = DEF.stage2Sound or (PATHS.soundDir .. "stage2.wav")
 
 -- ---------------------------------------------------------------------------
 -- Serialization (same table shape core loads) + file write
@@ -170,7 +185,11 @@ local function loadConfig()
   if not ok or not f then return nil, "missing" end
   pcall(io.close, f)
 
-  local pok, result = pcall(dofile, PATHS.config)
+  -- loadScript instead of dofile: the documented EdgeTX loader; the file exists
+  -- (probe above), so a nil/raising load here is a broken file -> "parse".
+  local cok, chunk = pcall(loadScript, PATHS.config)
+  if not cok or not chunk then return nil, "parse", tostring(chunk) end
+  local pok, result = pcall(chunk)
   if not pok then return nil, "parse", tostring(result) end
   if type(result) ~= "table" then return nil, "parse", "not a table" end
   if result.schemaVersion ~= SCHEMA_VERSION then
@@ -646,7 +665,7 @@ local function handleConfigError(e)
   S.cursor = moveCursor(S.cursor, e, 2)
   if isEnter(e) then
     if S.cursor == 1 then
-      openDialog("Reset configuration to defaults?",
+      openDialog("Reset settings to factory defaults? Only warnings, sounds and haptic change.",
                  function() resetConfig(function() S.screen = SCREEN.MAIN; S.cursor = 1 end) end)
     else
       return 1
@@ -1004,7 +1023,7 @@ local function handleSettings(e)
     elseif S.cursor == 4 then
       S.setField, S.setEditing, S.setOrig = "hapStr", true, S.set.hapStr
     elseif S.cursor == 5 then
-      openDialog("Reset configuration to defaults?",
+      openDialog("Reset settings to factory defaults? Only warnings, sounds and haptic change.",
                  function() resetConfig(function() enterSettings() end) end)
     elseif S.cursor == 6 then
       cancelSettings()   -- Back (discard with confirm if dirty)
