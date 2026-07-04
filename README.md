@@ -60,12 +60,37 @@ If telemetry is up but the required sensors (`RFMD`, `1RSS`, `RQly`) never show 
 
 The warning logic lives in a shared core module (`core.lua`). On top of it sit two wrappers, and you install **exactly one** of them:
 
-| | **Function script** | **Widget** |
-|---|---|---|
-| Audible warnings | ✅ | ✅ |
-| Visual link display | ❌ | ✅ (range %, RF mode, RSSI, LQ, TX power, FC flight mode, active antenna, ELRS module + firmware) |
-| Runs in the background | ✅ (Special Function) | ✅ (keeps warning even when the screen is not shown) |
-| Supported radios | all EdgeTX radios | color-display radios only |
+<table>
+  <thead>
+    <tr>
+      <th width="24%"></th>
+      <th width="38%">Function script</th>
+      <th width="38%">Widget</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Audible warnings</td>
+      <td>✅</td>
+      <td>✅</td>
+    </tr>
+    <tr>
+      <td>Visual link display</td>
+      <td>❌</td>
+      <td>✅ (range %, RF mode, RSSI, LQ, TX power, FC flight mode, active antenna, ELRS module + firmware)</td>
+    </tr>
+    <tr>
+      <td>Runs in the background</td>
+      <td>✅ (Special Function)</td>
+      <td>✅ (keeps warning even when the screen is not shown)</td>
+    </tr>
+    <tr>
+      <td>Supported radios</td>
+      <td>all EdgeTX radios</td>
+      <td>color-display radios only</td>
+    </tr>
+  </tbody>
+</table>
 
 > ⚠️ **Don't install both at the same time**, or they would play the warning tones twice. The widget fully replaces the function script.
 
