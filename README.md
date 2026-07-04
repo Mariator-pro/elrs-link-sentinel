@@ -41,6 +41,10 @@ A small EdgeTX project that watches your ExpressLRS link in the background and a
 
 With ELRS, the usable range depends heavily on the selected RF mode (packet rate). Each mode has its own receiver sensitivity limit. If you don't keep a constant eye on a live telemetry screen, you usually only notice a weakening link when it's already too late.
 
+<p align="center">
+  <img src="docs/img/widget-link.png" width="300" alt="elrs-link-sentinel widget showing the live link display">
+</p>
+
 The sentinel reads the receiver's telemetry values (RSSI of both antennas, link quality, current RF mode) and plays two graded warning tones:
 
 - **Link Warning:** The antenna(s) are near the current mode's sensitivity limit. *"Time to turn back toward the pilot."*
