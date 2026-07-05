@@ -25,7 +25,6 @@
 -- =====================================================================
 
 local VERSION        = "2.1.0"
-local SCHEMA_VERSION = 1
 local CORE_PATH      = "/SCRIPTS/SNTNL/core.lua"
 local PATHS = {
   config    = "/SCRIPTS/SNTNL/config.lua",
@@ -34,10 +33,11 @@ local PATHS = {
 }
 
 -- ---------------------------------------------------------------------------
--- Shared core module (read-only here): the editable ranges, the threshold
--- defaults and the default sound paths all live in core, so the on-radio editor
--- can never drift from what core actually enforces. Inline fallbacks keep the
--- tool usable if core is missing (it then just writes a config core will clamp).
+-- Shared core module (read-only here): the editable ranges, threshold defaults
+-- and default sound paths all live in core, so the on-radio editor can never
+-- drift from what core actually enforces. core is MANDATORY -- without it the
+-- editor has no schema/ranges to write against, so it shows a hint and exits
+-- instead of writing a config against guessed values.
 -- ---------------------------------------------------------------------------
 local core
 do
@@ -47,33 +47,39 @@ do
     if ok then core = mod end
   end
 end
+if not core then
+  local function run(event)
+    lcd.clear()
+    lcd.drawText(10, 10, "Link Sentinel: core.lua missing", COLOR_THEME_PRIMARY1 or 0)
+    lcd.drawText(10, 40, "Install " .. CORE_PATH, COLOR_THEME_PRIMARY1 or 0)
+    if event and event ~= 0 then return 2 end   -- any key closes the tool
+    return 0
+  end
+  return { run = run }
+end
 
--- Config path + schema version from core (the READER) when present, so a bump
--- there can never leave this tool writing configs core silently rejects.
-SCHEMA_VERSION = (core and core.CONFIG_SCHEMA_VERSION) or SCHEMA_VERSION
-PATHS.config   = (core and core.CONFIG_PATH) or PATHS.config
+-- Config path + schema version from core (the READER), so a bump there can never
+-- leave this tool writing configs core silently rejects.
+local SCHEMA_VERSION = core.CONFIG_SCHEMA_VERSION
+PATHS.config         = core.CONFIG_PATH
 
-local LIMITS = (core and core.LIMITS) or {
-  WARN_OFFSET_DB  = { min = 10, max = 30 },
-  RQLY_THRESHOLD  = { min = 30, max = 70 },
-  HAPTIC_STRENGTH = { min = 1,  max = 3 },
-}
+local LIMITS = core.LIMITS
 -- Factory defaults from core.DEFAULTS, NOT from core.PARAMS: PARAMS is already
 -- overlaid with the saved config when the tool loads core, so reading it would
 -- turn "Reset to defaults" into a no-op.
-local DEF        = (core and core.DEFAULTS) or {}
-local DEF_OFFSET = DEF.warnOffsetDb or 10
-local DEF_RQLY   = DEF.rqlyThreshold or 42
+local DEF        = core.DEFAULTS
+local DEF_OFFSET = DEF.warnOffsetDb
+local DEF_RQLY   = DEF.rqlyThreshold
 -- Haptic feedback: on/off plus a 1..3 strength tier. Defaults and pulse lengths
--- come from core when present so the Test button previews the exact buzz a real
--- warning fires; labels are the user-facing tier names.
-local HLIM = LIMITS.HAPTIC_STRENGTH or { min = 1, max = 3 }
+-- come from core so the Test button previews the exact buzz a real warning fires;
+-- labels are the user-facing tier names.
+local HLIM = LIMITS.HAPTIC_STRENGTH
 local HAPTIC = {
   min       = HLIM.min, max = HLIM.max,
-  default   = DEF.hapticStrength or 2,
+  default   = DEF.hapticStrength,
   defaultOn = DEF.haptic == true,
   labels    = { "Soft", "Normal", "Strong" },
-  dur       = (core and core.HAPTIC_DUR) or { 15, 30, 50 },
+  dur       = core.HAPTIC_DUR,
 }
 
 -- A config's strength, mirroring core's runtime rule so the editor shows the
@@ -99,8 +105,8 @@ function HAPTIC.test(on, strength, pulses)
     playHaptic(dur, (i < pulses) and dur or 0)   -- gap between pulses, none after the last
   end
 end
-PATHS.s1Default  = DEF.stage1Sound or (PATHS.soundDir .. "stage1.wav")
-PATHS.s2Default  = DEF.stage2Sound or (PATHS.soundDir .. "stage2.wav")
+PATHS.s1Default  = DEF.stage1Sound
+PATHS.s2Default  = DEF.stage2Sound
 
 -- ---------------------------------------------------------------------------
 -- Serialization (same table shape core loads) + file write
@@ -752,7 +758,7 @@ local ABOUT = (function()
   lines[#lines + 1] = "File locations..."   -- last line: ENTER opens the path popup
   -- {label, path}; labels are padded to a common width at popup time (see handleAbout).
   local pathItems = {
-    { "Core:",   CORE_PATH .. (core and "" or "  (MISSING)") },
+    { "Core:",   CORE_PATH },
     { "Config:", PATHS.config },
     { "Func:",   "/SCRIPTS/FUNCTIONS/sntnl.lua" },
     { "Widget:", "/WIDGETS/SNTNL/main.lua" },

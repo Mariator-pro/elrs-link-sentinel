@@ -21,6 +21,10 @@
 -- 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 -- =====================================================================
 
+-- ---------------------------------------------------------------------------
+-- Core load + state
+-- ---------------------------------------------------------------------------
+
 local CORE_PATH = "/SCRIPTS/SNTNL/core.lua"
 
 local core    -- the loaded core module
@@ -31,6 +35,10 @@ local function init_func()
   core  = assert(loadScript(CORE_PATH))()
   state = core.newState()
 end
+
+-- ---------------------------------------------------------------------------
+-- Per-run entry point
+-- ---------------------------------------------------------------------------
 
 -- pcall: a transient error in core must not halt this script -- it is the only
 -- audio warning path. But it must not stay silent forever either: after

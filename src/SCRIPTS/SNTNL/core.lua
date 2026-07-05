@@ -27,11 +27,11 @@
 
 local M = {}
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Tunable parameters, shared by both variants. The widget must read thresholds
 -- (e.g. RQLY_THRESHOLD) from here, never hard-code them, or the display drifts
 -- from the audio warning.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 M.PARAMS = {
   WARN_OFFSET_DB     = 10,     -- Offset (dBm) added on top of the sensitivity limit
   RQLY_THRESHOLD     = 42,     -- Lower RQly bound in % for stage 2
@@ -57,12 +57,12 @@ M.SOUNDS = {
   cfgerr = "/SOUNDS/en/SCRIPTS/SNTNL/cfgerr.wav",
 }
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Optional configuration overlay. The Tools-Script (/SCRIPTS/TOOLS/SNTNL.lua)
 -- writes /SCRIPTS/SNTNL/config.lua; both variants pick it up here, so there is
 -- no second place that reads the user's thresholds/sounds. The file is OPTIONAL:
 -- without it (or with a broken one) the hard-coded defaults above stay in force.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Exported: the Tools-Script (the config WRITER) reads path and schema version
 -- from here, so writer and reader can never drift apart.
 M.CONFIG_PATH           = "/SCRIPTS/SNTNL/config.lua"
@@ -146,6 +146,10 @@ local function loadConfigOnce()
   M.applyConfigOverrides(result)
 end
 pcall(loadConfigOnce)
+
+-- ---------------------------------------------------------------------------
+-- Telemetry sensors + sensitivity limits
+-- ---------------------------------------------------------------------------
 
 -- Telemetry sensor names (CRSF/ELRS standard).
 M.SENSORS = {
@@ -232,9 +236,9 @@ M.MODE_NAMES = {
   [101] = "X150Hz",
 }
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Time / sensor helpers
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local function nowMs()
   return getTime() * 10
 end
@@ -253,9 +257,9 @@ local function readOptional(name)
   return nil
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- State (caller-owned)
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 function M.newState()
   return {
     currentRFMD   = nil,
@@ -294,9 +298,9 @@ local function resetAll(state)
   resetStage(state.stage2)
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Pure logic
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 
 -- Unknown RFMD -> 0 dBm sensitivity -> warning threshold +WARN_OFFSET_DB
 -- (permanent warning).
@@ -321,9 +325,9 @@ function M.debounce(s, cond, now)
   end
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Telemetry reading -- the single place that reads ALL sensors raw.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 function M.readSnapshot()
   local S = M.SENSORS
   return {
@@ -341,10 +345,10 @@ function M.readSnapshot()
   }
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Warning state machine (pure: mutates `state`, no I/O). Returns a result
 -- table the caller acts on (play flags) and the widget renders.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 function M.evaluate(state, snap, now)
   local result = {}
 
@@ -433,11 +437,11 @@ local function warnHaptic(pulses)
   end
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- One full cycle: read -> evaluate -> play. Returns the result table plus the
 -- raw snapshot for the widget. The function script ignores the return value;
 -- the widget derives all display values from it.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 function M.update(state, now)
   now = now or nowMs()
   local snap   = M.readSnapshot()

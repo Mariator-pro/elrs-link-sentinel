@@ -17,10 +17,10 @@
 -- GNU General Public License for more details.
 -- =====================================================================
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Responsive scaling: every pixel constant runs through sx(); positions scale
 -- with S, fonts are fixed EdgeTX stages.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local REF_W = 480
 local S     = (LCD_W or REF_W) / REF_W
 local function sx(v) return math.floor(v * S + 0.5) end
@@ -29,10 +29,10 @@ local function sx(v) return math.floor(v * S + 0.5) end
 -- doesn't flip tier on a minor font-metric change.
 local TIER_TOL = sx(4)
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Shared core module. Loaded once here (module level) for all instances. If
 -- it cannot be loaded, refresh() shows a "Core missing" tile instead.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local CORE_PATH = "/SCRIPTS/SNTNL/core.lua"
 local core
 do
@@ -61,10 +61,10 @@ local NO_LINK_DEBOUNCE = 150   -- getTime ticks (1.5 s)
 -- below. Only green->yellow is display-only; the red end ties to the shared threshold.
 local LQ_OK_PCT = 70
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Color palettes. Set per frame from the Theme option. Escalation colors are
 -- theme-independent.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local DARK = {
   transparent = false,
   panel  = lcd.RGB( 18,  20,  18),
@@ -113,10 +113,10 @@ local function brandColor(opt, customCol)
   return COLORS.accent
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Text helper: custom color via CUSTOM_COLOR so a raw RGB never collides
 -- with the size/attribute bits in the flags. flags = only size / align / BOLD.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local function dtext(x, y, text, color, flags)
   lcd.setColor(CUSTOM_COLOR, color)
   lcd.drawText(x, y, text, CUSTOM_COLOR + (flags or 0))
@@ -205,12 +205,12 @@ local function drawSplitText(x, y, text, flags, fillRight, onFill, onTrack)
   end
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Display derivation (Widget-only). Picks values from core's result for the
 -- running tile. The active-antenna RSS selection lives HERE (display logic);
 -- core's warning decision does not use ANT.
 --   stage : 0 = OK, 1 = WARNING, 2 = CRITICAL
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local function buildDisplay(ctx, r)
   local snap = r.snapshot
   local ant  = snap.ant                              -- 0/1, or nil (no ANT sensor)
@@ -254,10 +254,10 @@ local function smoothRange(ctx, target)
   end
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- CRSF device-info (cosmetic header: module name + firmware). Ping the module,
 -- parse its device-info reply. Frame types / addresses / layout are fixed by CRSF.
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local CRSF_PING        = 0x28   -- ping devices (request)
 local CRSF_DEVICE_INFO = 0x29   -- device info (reply)
 local ADDR_BROADCAST   = 0x00
@@ -307,9 +307,9 @@ local function pollDeviceInfo(ctx)
   end
 end
 
--- ---------------------------------------------------------------------
--- Drawing
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- Drawing helpers + status indicators
+-- ---------------------------------------------------------------------------
 
 -- Brand header: brand-coloured square + label, one text line tall (no padding) to stay
 -- compact in tight tiers. Returns its height.
@@ -343,6 +343,10 @@ local function drawHeartbeat(ctx)
   local r = sx(3)
   lcd.drawFilledCircle(z.w - sx(4) - r, sx(4) + r, r, CRIT_COL)
 end
+
+-- ---------------------------------------------------------------------------
+-- NO LINK + message / error tiles
+-- ---------------------------------------------------------------------------
 
 -- NO LINK tile: brand title over an animated status line, plus the TX module/FW when
 -- known (available even without an RX link, as it comes from the module). On a zone too
@@ -456,6 +460,10 @@ local function drawErrorTile(z, line1, line2)
   end
 end
 
+-- ---------------------------------------------------------------------------
+-- Info grid + range bar
+-- ---------------------------------------------------------------------------
+
 -- Range bar: track + stage-coloured fill (length = range %), status word (OK/WARNING/
 -- CRITICAL) two-tone inside it. d.range == nil (unknown mode) -> full bar. The word is
 -- drawn only when the bar is tall enough for it; on a thin bar the fill colour alone
@@ -545,6 +553,10 @@ local function drawPctRow(x0, W, top, maxH, d, sc)
   drawPctCaption(x0, W, pctBottom, x0 + textW(pctTxt, numFlag) + sx(6), d)
   return pctBottom
 end
+
+-- ---------------------------------------------------------------------------
+-- Main tile (FULL / MEDIUM / SMALL)
+-- ---------------------------------------------------------------------------
 
 -- FULL tier: header, range block (big % + bar + status) and the 2x3 info grid.
 -- For large/half-page zones (roughly a quarter page and up).
@@ -717,9 +729,9 @@ local function drawMain(W, H, x0, y0, d)
   end
 end
 
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Widget lifecycle
--- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 local function create(zone, opts)
   local ctx = {
     zone = zone, options = opts,
