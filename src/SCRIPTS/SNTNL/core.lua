@@ -105,10 +105,12 @@ local function boolOr(v, fallback)
   return fallback
 end
 
--- String helper: sound paths must be strings -- anything else falls back so a
--- corrupt config can never reach playFile.
-local function strOr(v, fallback)
+-- Sound override helper: a string is a custom path, `false` means the user muted
+-- this event (it stays silent), and anything else (nil / garbage) falls back to
+-- the bundled default so a corrupt config can never reach playFile with junk.
+local function soundOr(v, fallback)
   if type(v) == "string" then return v end
+  if v == false then return false end
   return fallback
 end
 
@@ -126,8 +128,8 @@ function M.applyConfigOverrides(cfg)
   M.PARAMS.HAPTIC_STRENGTH = clampNum(cfg.hapticStrength,
     L.HAPTIC_STRENGTH.min, L.HAPTIC_STRENGTH.max, DEFAULTS.hapticStrength)
   local snd = (type(cfg.sounds) == "table") and cfg.sounds or {}
-  M.SOUNDS.stage1 = strOr(snd.stage1, DEFAULTS.stage1Sound)
-  M.SOUNDS.stage2 = strOr(snd.stage2, DEFAULTS.stage2Sound)
+  M.SOUNDS.stage1 = soundOr(snd.stage1, DEFAULTS.stage1Sound)
+  M.SOUNDS.stage2 = soundOr(snd.stage2, DEFAULTS.stage2Sound)
 end
 
 -- Load the optional config ONCE at module load. The thresholds are ground-config
@@ -448,11 +450,13 @@ function M.update(state, now)
   local result = M.evaluate(state, snap, now)
   result.snapshot = snap
 
+  -- A muted event (SOUNDS.stageN == false) skips playFile but still buzzes: the
+  -- haptic cue has its own on/off setting and is independent of the voice.
   if result.playStage2 then
-    playFile(M.SOUNDS.stage2)
+    if M.SOUNDS.stage2 then playFile(M.SOUNDS.stage2) end
     warnHaptic(2)
   elseif result.playStage1 then
-    playFile(M.SOUNDS.stage1)
+    if M.SOUNDS.stage1 then playFile(M.SOUNDS.stage1) end
     warnHaptic(1)
   end
   if result.playCfgErr then

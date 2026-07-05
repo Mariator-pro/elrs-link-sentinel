@@ -182,7 +182,7 @@ To adjust the warning thresholds and pick custom sounds, use the bundled **setti
 - **Settings**: a two-row table (`Stage 1`, `Stage 2`). Scroll onto a row and press ENTER to step through its cells (Threshold → Sound → Test):
   - **Stage 1 → Threshold**: the warning margin in dB above the mode's sensitivity limit. **Editable 10-30 dB** (default 10). Higher = warns *earlier* / keeps more reserve.
   - **Stage 2 → Threshold**: the RQly bound (%) for the critical warning. **Editable 30-70 %** (default 42). Higher = critical fires *earlier*.
-  - **Sound**: pick `Default` or any `.wav` you dropped into `/SOUNDS/en/SCRIPTS/SNTNL/`, per stage. Files can have **any name**, and every `.wav` in that folder shows up in the list automatically.
+  - **Sound**: pick `Off`, `Default`, or any `.wav` you dropped into `/SOUNDS/en/SCRIPTS/SNTNL/`, per stage. Files can have **any name**, and every `.wav` in that folder shows up in the list automatically. `Off` silences **only that stage's tone** — if haptic feedback is on, its pulse still fires (the tone and the buzz are independent).
   - **Test**: plays the row's currently selected sound so you can compare them on the spot.
 - **Haptic feedback**: vibrate alongside the warning tones (needs a radio with a vibration motor). Off by default; turn it `On` to add a pulse for Stage 1 and a stronger double pulse for Stage 2.
   - **Haptic strength**: pulse-length tier (`Soft` / `Normal` / `Strong`, default `Normal`). Only shown while haptic feedback is on.

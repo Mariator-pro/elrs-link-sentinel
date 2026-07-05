@@ -251,27 +251,37 @@ local function listSoundFiles()
   return files
 end
 
--- Picker options { label, path }; index 1 is the default, stored as nil in the
--- config so a deleted file falls back to the bundled default instead of breaking.
+-- Fixed picker slots that always precede the user's sound files: "Off" mutes the
+-- event (path == false), "Default" plays the bundled file (stored as nil in the
+-- config so a deleted file falls back to the default instead of breaking).
+local SND_OFF, SND_DEFAULT = 1, 2
+
+-- Picker options { label, path }: the two fixed slots above, then the user files.
 local function buildSoundOptions(defaultPath, files)
-  local opts = { { label = "Default", path = defaultPath } }
+  local opts = {}
+  opts[SND_OFF]     = { label = "Off",     path = false }
+  opts[SND_DEFAULT] = { label = "Default", path = defaultPath }
   for _, fname in ipairs(files) do
     opts[#opts + 1] = { label = fname, path = PATHS.soundDir .. fname }
   end
   return opts
 end
 
--- 1-based index of the option matching `path` (nil or no-longer-present -> 1 = Default).
-local function soundOptionIndex(opts, path)
-  if path then
-    for i, o in ipairs(opts) do if o.path == path then return i end end
+-- 1-based index for a stored config value: false -> Off, a matching path -> that
+-- file, and nil / a no-longer-present file -> Default.
+local function soundOptionIndex(opts, value)
+  if value == false then return SND_OFF end
+  if type(value) == "string" then
+    for i, o in ipairs(opts) do if o.path == value then return i end end
   end
-  return 1
+  return SND_DEFAULT
 end
 
--- Config value for a selection: nil for Default, else the chosen file's path.
+-- Config value for a selection: false for Off, nil for Default, else the file path.
 local function soundConfigValue(opts, idx)
-  return (idx > 1) and opts[idx].path or nil
+  if idx == SND_OFF     then return false end
+  if idx == SND_DEFAULT then return nil end
+  return opts[idx].path
 end
 
 -- ---------------------------------------------------------------------------
@@ -407,10 +417,17 @@ end
 -- Draws one button at (x, y): outlined, or filled with the accent colour when
 -- focused. Returns its width so callers can lay several out in a row.
 local BTN_PADX = 6
-local function drawButton(x, y, label, focused)
+local function drawButton(x, y, label, focused, disabled)
   local _, th = lcd.sizeText("Mg")
   local w     = lcd.sizeText(label) + 2 * BTN_PADX
-  if focused then
+  if disabled then
+    -- Non-actionable (Test while the sound is Off): greyed + struck through. A
+    -- focus-coloured border still shows the cursor lands here; ENTER is a no-op.
+    lcd.drawRectangle(x, y, w, th + 4, focused and COLOR_THEME_FOCUS or COLOR_THEME_DISABLED)
+    lcd.drawText(x + BTN_PADX, y + 2, label, COLOR_THEME_DISABLED)
+    lcd.drawFilledRectangle(x + BTN_PADX, y + 2 + math.floor(th / 2),
+                            w - 2 * BTN_PADX, 2, COLOR_THEME_DISABLED)
+  elseif focused then
     lcd.drawFilledRectangle(x, y, w, th + 4, COLOR_THEME_FOCUS)
     lcd.drawText(x + BTN_PADX, y + 2, label, COLOR_THEME_PRIMARY2)
   else
@@ -808,7 +825,18 @@ end
 -- reset-config (5), Back (6), Save (7). ENTER on a Stage row dives in; the roller
 -- then steps its cells (SET_SUBS) and ENTER edits/opens the picker/plays the focused one.
 local SET_ITEMS = 7
-local SET_SUBS  = { "thr", "snd", "test" }
+local SET_SUBS      = { "thr", "snd", "test" }
+local SET_SUBS_MUTE = { "thr", "snd" }   -- Test dropped when the sound is Off
+
+-- Sub-cells reachable in the currently dived Stage row: the Test cell is skipped
+-- when that row's sound is Off (nothing to preview), so the roller steps past it.
+local function activeSubs()
+  local opt
+  if S.setDive == 1 then opt = S.sndS1Opts[S.set.s1Idx]
+  else                   opt = S.sndS2Opts[S.set.s2Idx] end
+  if opt and opt.path == false then return SET_SUBS_MUTE end
+  return SET_SUBS
+end
 
 -- One Stage row per line: label, threshold (value + how to render it) and the
 -- sound option list + selected index. The edit range lives in LIMITS, read
@@ -875,7 +903,8 @@ local function drawStageRow(r, row, y)
        dived and S.setSub == "thr" and S.setEditing)
   local sndTextX = drawArrowBefore(ST_SND, y, COLOR_THEME_PRIMARY1)
   cell(sndTextX, row.sndOpts[row.sndIdx].label, "snd", false)   -- sound uses the picker
-  drawButton(ST_TEST, y - 2, "Play", dived and S.setSub == "test")
+  drawButton(ST_TEST, y - 2, "Play", dived and S.setSub == "test",
+             row.sndOpts[row.sndIdx].path == false)   -- Off -> Test disabled
 end
 
 -- A "label value" row edited in place like the thresholds: value blinks while
@@ -989,11 +1018,12 @@ local function handleSettings(e)
   -- opens the picker/plays the focused cell, EXIT leaves the row.
   if S.setDive then
     if isNext(e) or isPrev(e) then
+      local subs = activeSubs()
       local idx = 1
-      for j, s in ipairs(SET_SUBS) do if s == S.setSub then idx = j end end
+      for j, s in ipairs(subs) do if s == S.setSub then idx = j end end
       idx = idx + (isNext(e) and 1 or -1)
-      if idx < 1 then idx = #SET_SUBS elseif idx > #SET_SUBS then idx = 1 end
-      S.setSub = SET_SUBS[idx]
+      if idx < 1 then idx = #subs elseif idx > #subs then idx = 1 end
+      S.setSub = subs[idx]
     elseif isEnter(e) then
       local isS1 = S.setDive == 1
       if S.setSub == "thr" then
@@ -1007,9 +1037,15 @@ local function handleSettings(e)
         openPicker(isS1 and "Stage 1 sound" or "Stage 2 sound", labels, S.set[field],
                    function(sel) S.set[field] = sel end)
       else   -- test: preview the row's current sound (and haptic, if enabled)
-        playFile(isS1 and S.sndS1Opts[S.set.s1Idx].path
-                       or S.sndS2Opts[S.set.s2Idx].path)
-        HAPTIC.test(S.set.haptic, S.set.hapStr, isS1 and 1 or 2)
+        -- Off stores `path == false`, which disables the Test button entirely
+        -- (no sound, no buzz). Explicit if/else, not `a and b or c` (a false b trips it).
+        local path
+        if isS1 then path = S.sndS1Opts[S.set.s1Idx].path
+        else         path = S.sndS2Opts[S.set.s2Idx].path end
+        if type(path) == "string" then
+          playFile(path)
+          HAPTIC.test(S.set.haptic, S.set.hapStr, isS1 and 1 or 2)
+        end
       end
     elseif isExit(e) then
       S.setDive = nil
