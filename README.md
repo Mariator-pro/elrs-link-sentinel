@@ -9,6 +9,7 @@ A small EdgeTX project that watches your ExpressLRS link in the background and a
 [![ExpressLRS](https://img.shields.io/badge/ExpressLRS-%E2%89%A5%204.0-orange)](https://www.expresslrs.org)
 [![GitHub issues](https://img.shields.io/github/issues/Mariator-pro/elrs-link-sentinel)](../../issues)
 [![GitHub last commit](https://img.shields.io/github/last-commit/Mariator-pro/elrs-link-sentinel)](../../commits/main)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-support-yellow?logo=buy-me-a-coffee&logoColor=white)](https://www.buymeacoffee.com/mariatorpro)
 
 ---
 
