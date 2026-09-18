@@ -53,10 +53,6 @@ local RANGE_STEP_SMALL = 1
 local RANGE_STEP_BIG   = 4
 local RANGE_JUMP       = 8
 
--- Show the NO LINK tile only after the link has been gone this long; brief
--- dropouts keep the last good tile instead of flickering to NO LINK.
-local NO_LINK_DEBOUNCE = 150   -- getTime ticks (1.5 s)
-
 -- LQ mini-bar: green at/above this %, yellow down to core's RQLY_THRESHOLD, red
 -- below. Only green->yellow is display-only; the red end ties to the shared threshold.
 local LQ_OK_PCT = 70
@@ -816,11 +812,12 @@ local function refresh(ctx, event, touchState)
       return
     end
 
-    -- NO LINK is debounced: hold the last good running tile through a brief dropout,
-    -- and only fall through to the NO LINK screen once the loss persists.
+    -- NO LINK is debounced with core's own grace: hold the last good running tile
+    -- exactly as long as core holds the warning, then fall through to NO LINK.
     if r.status == "no_link" then
       ctx.linkLostSince = ctx.linkLostSince or getTime()
-      if ctx.lastRunning and (getTime() - ctx.linkLostSince) < NO_LINK_DEBOUNCE then
+      if ctx.lastRunning
+         and (getTime() - ctx.linkLostSince) * 10 < core.PARAMS.LINK_LOSS_GRACE_MS then
         r = ctx.lastRunning
       else
         ctx.rangeSmoothed = nil   -- reset smoothing so the next connect snaps fresh

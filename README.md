@@ -93,7 +93,7 @@ The warning logic lives in a shared core module (`core.lua`). On top of it sit t
   </tbody>
 </table>
 
-> ⚠️ **Don't install both at the same time**, or they would play the warning tones twice. The widget fully replaces the function script.
+> ⚠️ **Don't install both at the same time**, or they would play the warning tones twice. The widget fully replaces the function script. For the same reason, place the widget on **one screen only**.
 
 Both variants need `core.lua` on the SD card, because it holds the shared warning logic that keeps audio and display in sync.
 

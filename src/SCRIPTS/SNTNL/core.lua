@@ -37,8 +37,9 @@ M.PARAMS = {
   RQLY_THRESHOLD     = 42,     -- Lower RQly bound in % for stage 2
   DEBOUNCE_MS        = 2000,   -- Debounce time in ms (activation and deactivation)
   REPEAT_MS          = 5000,   -- Sound repeat interval in ms
-  LINK_LOSS_GRACE_MS = 250,    -- Tolerate a telemetry gap this long before resetting the
-                               -- warning state (see evaluate); well under the ~1 s ELRS failsafe.
+  LINK_LOSS_GRACE_MS = 1500,   -- Tolerate a telemetry gap this long before resetting the
+                               -- warning state (see evaluate). Also the widget's hold before
+                               -- it shows NO LINK, so tone and tile never disagree.
   CFG_ERR_GRACE_MS   = 10000,  -- Grace period before the cfg-error sound is first played
   CFG_ERR_REPEAT_MS  = 30000,  -- Cfg-error sound repeat interval in ms
   HAPTIC             = false,  -- Vibrate alongside the warning sound (opt-in)
@@ -105,31 +106,61 @@ local function boolOr(v, fallback)
   return fallback
 end
 
--- Sound override helper: a string is a custom path, `false` means the user muted
--- this event (it stays silent), and anything else (nil / garbage) falls back to
--- the bundled default so a corrupt config can never reach playFile with junk.
+-- True unless fstat positively says the file is gone. fstat is absent on the
+-- desktop and pcall-guarded, so "unknown" keeps the custom path (no regression).
+local function soundFileExists(path)
+  if not fstat then return true end
+  local ok, info = pcall(fstat, path)
+  return not ok or info ~= nil
+end
+
+-- Sound override helper: a string is a custom path (dropped to the default when
+-- the file no longer exists on the card, so the warning still sounds), `false`
+-- means the user muted this event (it stays silent), and anything else (nil /
+-- garbage) falls back to the bundled default so a corrupt config can never reach
+-- playFile with junk.
 local function soundOr(v, fallback)
-  if type(v) == "string" then return v end
+  if type(v) == "string" then
+    if soundFileExists(v) then return v end
+    return fallback
+  end
   if v == false then return false end
   return fallback
 end
 
--- Apply a parsed config table over PARAMS/SOUNDS (pure: no file I/O, so it is
--- directly unit-testable). Clamps the thresholds to M.LIMITS so even a corrupt
--- config can never set an unsafe value; a nil sound means "use the default".
-function M.applyConfigOverrides(cfg)
+-- Normalise a parsed config table into a clean copy (never touches PARAMS; the
+-- only I/O is one fstat per custom sound):
+-- thresholds clamped to M.LIMITS, wrong types replaced by the factory default, a
+-- sound is a path string, false (muted) or nil (default). The ONE place that
+-- decides what a config value means -- the runtime overlay below and the
+-- Tools-Script's editor both go through here, so they can never disagree on a
+-- hand-edited file.
+function M.normalizeConfig(cfg)
   cfg = cfg or {}
-  local L = M.LIMITS
-  M.PARAMS.WARN_OFFSET_DB = clampNum(cfg.warnOffsetDb,
-    L.WARN_OFFSET_DB.min, L.WARN_OFFSET_DB.max, DEFAULTS.warnOffsetDb)
-  M.PARAMS.RQLY_THRESHOLD = clampNum(cfg.rqlyThreshold,
-    L.RQLY_THRESHOLD.min, L.RQLY_THRESHOLD.max, DEFAULTS.rqlyThreshold)
-  M.PARAMS.HAPTIC = boolOr(cfg.haptic, DEFAULTS.haptic)
-  M.PARAMS.HAPTIC_STRENGTH = clampNum(cfg.hapticStrength,
-    L.HAPTIC_STRENGTH.min, L.HAPTIC_STRENGTH.max, DEFAULTS.hapticStrength)
+  local L   = M.LIMITS
   local snd = (type(cfg.sounds) == "table") and cfg.sounds or {}
-  M.SOUNDS.stage1 = soundOr(snd.stage1, DEFAULTS.stage1Sound)
-  M.SOUNDS.stage2 = soundOr(snd.stage2, DEFAULTS.stage2Sound)
+  return {
+    warnOffsetDb   = clampNum(cfg.warnOffsetDb,
+                       L.WARN_OFFSET_DB.min, L.WARN_OFFSET_DB.max, DEFAULTS.warnOffsetDb),
+    rqlyThreshold  = clampNum(cfg.rqlyThreshold,
+                       L.RQLY_THRESHOLD.min, L.RQLY_THRESHOLD.max, DEFAULTS.rqlyThreshold),
+    haptic         = boolOr(cfg.haptic, DEFAULTS.haptic),
+    hapticStrength = clampNum(cfg.hapticStrength,
+                       L.HAPTIC_STRENGTH.min, L.HAPTIC_STRENGTH.max, DEFAULTS.hapticStrength),
+    sounds = { stage1 = soundOr(snd.stage1, nil), stage2 = soundOr(snd.stage2, nil) },
+  }
+end
+
+-- Apply a parsed config table over PARAMS/SOUNDS (pure: no file I/O, so it is
+-- directly unit-testable). A nil sound means "use the default".
+function M.applyConfigOverrides(cfg)
+  local n = M.normalizeConfig(cfg)
+  M.PARAMS.WARN_OFFSET_DB  = n.warnOffsetDb
+  M.PARAMS.RQLY_THRESHOLD  = n.rqlyThreshold
+  M.PARAMS.HAPTIC          = n.haptic
+  M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
+  M.SOUNDS.stage1 = (n.sounds.stage1 == nil) and DEFAULTS.stage1Sound or n.sounds.stage1
+  M.SOUNDS.stage2 = (n.sounds.stage2 == nil) and DEFAULTS.stage2Sound or n.sounds.stage2
 end
 
 -- Load the optional config ONCE at module load. The thresholds are ground-config
@@ -357,7 +388,7 @@ function M.evaluate(state, snap, now)
   -- Telemetry lost -> stay silent (ELRS alarms on a real loss itself). Do NOT reset
   -- immediately: a brief gap must not wipe an active warning, or both stages re-debounce
   -- in parallel on reconnect and flash a spurious OK between WARNING and CRITICAL. Reset
-  -- only once the loss persists LINK_LOSS_GRACE_MS (well before the ~1 s ELRS failsafe).
+  -- only once the loss persists LINK_LOSS_GRACE_MS.
   if not snap.rssiValid then
     if state.linkLostSince == 0 then state.linkLostSince = now end
     if (now - state.linkLostSince) >= M.PARAMS.LINK_LOSS_GRACE_MS then

@@ -68,8 +68,6 @@ local LIMITS = core.LIMITS
 -- overlaid with the saved config when the tool loads core, so reading it would
 -- turn "Reset to defaults" into a no-op.
 local DEF        = core.DEFAULTS
-local DEF_OFFSET = DEF.warnOffsetDb
-local DEF_RQLY   = DEF.rqlyThreshold
 -- Haptic feedback: on/off plus a 1..3 strength tier. Defaults and pulse lengths
 -- come from core so the Test button previews the exact buzz a real warning fires;
 -- labels are the user-facing tier names.
@@ -77,30 +75,16 @@ local HLIM = LIMITS.HAPTIC_STRENGTH
 local HAPTIC = {
   min       = HLIM.min, max = HLIM.max,
   default   = DEF.hapticStrength,
-  defaultOn = DEF.haptic == true,
   labels    = { "Soft", "Normal", "Strong" },
   dur       = core.HAPTIC_DUR,
 }
-
--- A config's strength, mirroring core's runtime rule so the editor shows the
--- tier a real warning fires: integer values clamp to the range; anything else
--- lands on the "Normal" tier.
-function HAPTIC.strengthOf(cfg)
-  local hs = cfg.hapticStrength
-  if type(hs) ~= "number" or hs % 1 ~= 0 then return HAPTIC.default end
-  if hs < HAPTIC.min then return HAPTIC.min end
-  if hs > HAPTIC.max then return HAPTIC.max end
-  return hs
-end
 
 -- Buzz alongside a Test preview, mirroring the warning cue: pulses=1 for Stage 1,
 -- 2 for Stage 2. Uses the strength currently set in the tool (not the saved
 -- config). No-op when haptic is off or playHaptic is absent (desktop / motorless).
 function HAPTIC.test(on, strength, pulses)
   if not on or not playHaptic then return end
-  local s = strength
-  if type(s) ~= "number" or s < HAPTIC.min or s > HAPTIC.max then s = HAPTIC.default end
-  local dur = HAPTIC.dur[s]   -- s is clamped to 1..3, so always a valid index
+  local dur = HAPTIC.dur[strength] or HAPTIC.dur[HAPTIC.default]   -- same fallback as core
   for i = 1, pulses do
     playHaptic(dur, (i < pulses) and dur or 0)   -- gap between pulses, none after the last
   end
@@ -201,19 +185,17 @@ local function loadConfig()
   if result.schemaVersion ~= SCHEMA_VERSION then
     return nil, "schema", tostring(result.schemaVersion)
   end
-  result.sounds = result.sounds or {}
-  return result
+  -- core's clamp/type rules, so a hand-edited value shows here exactly as the
+  -- runtime uses it (and a wrong type can never reach the editor).
+  local cfg = core.normalizeConfig(result)
+  cfg.schemaVersion = SCHEMA_VERSION
+  return cfg
 end
 
 local function defaultConfig()
-  return {
-    schemaVersion  = SCHEMA_VERSION,
-    warnOffsetDb   = DEF_OFFSET,
-    rqlyThreshold  = DEF_RQLY,
-    haptic         = HAPTIC.defaultOn,
-    hapticStrength = HAPTIC.default,
-    sounds         = {},
-  }
+  local cfg = core.normalizeConfig({})
+  cfg.schemaVersion = SCHEMA_VERSION
+  return cfg
 end
 
 -- Writes the config. core reads it once at load (no reload sentinel needed --
@@ -717,12 +699,12 @@ local function enterSettings()
   local files   = listSoundFiles()
   S.sndS1Opts   = buildSoundOptions(PATHS.s1Default, files)
   S.sndS2Opts   = buildSoundOptions(PATHS.s2Default, files)
-  local snd     = S.cfg.sounds or {}
+  local snd     = S.cfg.sounds
   S.set = {
-    offset  = S.cfg.warnOffsetDb  or DEF_OFFSET,
-    rqly    = S.cfg.rqlyThreshold or DEF_RQLY,
-    haptic  = (S.cfg.haptic == true),
-    hapStr  = HAPTIC.strengthOf(S.cfg),
+    offset  = S.cfg.warnOffsetDb,
+    rqly    = S.cfg.rqlyThreshold,
+    haptic  = S.cfg.haptic,
+    hapStr  = S.cfg.hapticStrength,
     s1Idx   = soundOptionIndex(S.sndS1Opts, snd.stage1),
     s2Idx   = soundOptionIndex(S.sndS2Opts, snd.stage2),
   }
@@ -851,11 +833,11 @@ local function settingsRows()
 end
 
 local function settingsDirty()
-  local snd = S.cfg.sounds or {}
-  return S.set.offset ~= (S.cfg.warnOffsetDb or DEF_OFFSET)
-      or S.set.rqly   ~= (S.cfg.rqlyThreshold or DEF_RQLY)
-      or S.set.haptic ~= (S.cfg.haptic == true)
-      or S.set.hapStr ~= HAPTIC.strengthOf(S.cfg)
+  local snd = S.cfg.sounds
+  return S.set.offset ~= S.cfg.warnOffsetDb
+      or S.set.rqly   ~= S.cfg.rqlyThreshold
+      or S.set.haptic ~= S.cfg.haptic
+      or S.set.hapStr ~= S.cfg.hapticStrength
       or soundConfigValue(S.sndS1Opts, S.set.s1Idx) ~= snd.stage1
       or soundConfigValue(S.sndS2Opts, S.set.s2Idx) ~= snd.stage2
 end
@@ -870,7 +852,6 @@ local function saveSettings()
   S.cfg.rqlyThreshold  = S.set.rqly
   S.cfg.haptic         = S.set.haptic
   S.cfg.hapticStrength = S.set.hapStr
-  S.cfg.sounds = S.cfg.sounds or {}
   S.cfg.sounds.stage1 = soundConfigValue(S.sndS1Opts, S.set.s1Idx)
   S.cfg.sounds.stage2 = soundConfigValue(S.sndS2Opts, S.set.s2Idx)
   withRetry(function() return saveConfig(S.cfg) end, leaveSettings)
