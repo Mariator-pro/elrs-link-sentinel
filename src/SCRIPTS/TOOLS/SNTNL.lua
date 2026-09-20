@@ -24,7 +24,7 @@
 -- 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 -- =====================================================================
 
-local VERSION        = "2.1.1"
+local VERSION        = core.VERSION
 local CORE_PATH      = "/SCRIPTS/SNTNL/core.lua"
 local PATHS = {
   config    = "/SCRIPTS/SNTNL/config.lua",
