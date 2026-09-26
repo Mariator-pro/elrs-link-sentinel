@@ -46,7 +46,14 @@ end
 local ERROR_LIMIT = 5
 local errorStreak = 0
 
+-- Same cadence as the widget: run() fires every mixer cycle, the core needs 10 Hz.
+local TICK_INTERVAL = 10   -- 0.1 s (getTime units)
+local lastTick             -- nil until the first run
+
 local function run_func()
+  local now = getTime()
+  if lastTick and now - lastTick < TICK_INTERVAL then return end
+  lastTick = now
   local ok, err = pcall(core.update, state)
   if ok then
     errorStreak = 0

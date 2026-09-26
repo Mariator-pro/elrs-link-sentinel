@@ -278,18 +278,48 @@ local function nowMs()
   return getTime() * 10
 end
 
--- getValue() returns 0 for undiscovered telemetry sources, which is
--- indistinguishable from a real reading of 0. getFieldInfo() instead returns
--- nil for unknown sources, so we use it for existence checks.
+-- getFieldInfo is nil for a sensor that was never discovered; getValue would give 0.
 local function sensorExists(name)
-  return getFieldInfo(name) ~= nil
+  local ok, info = pcall(getFieldInfo, name)
+  return ok and info ~= nil
 end
 
--- A display-only sensor: its raw value if present, else nil so the widget can
--- show "--" instead of a misleading 0 (TPWR/FM/ANT may simply not exist).
-local function readOptional(name)
-  if sensorExists(name) then return getValue(name) end
+-- Existence per sensor, re-checked at most every `interval` (same unit as `now`).
+-- names = { key = "SensorName", ... }; returns the cached { key = true/false }.
+local function sensorsPresent(state, names, now, interval)
+  if state.sensorCheckAt == nil or now - state.sensorCheckAt >= interval then
+    state.sensorCheckAt = now
+    local has = {}
+    for key, name in pairs(names) do has[key] = sensorExists(name) end
+    state.sensorsPresent = has
+  end
+  return state.sensorsPresent
+end
+
+-- Value of a present sensor, nil when absent (display shows "--", not a fake 0).
+local function readPresent(has, names, key)
+  if not has[key] then return nil end
+  local ok, v = pcall(getValue, names[key])
+  if ok then return v end
   return nil
+end
+
+local SENSOR_CHECK_MS = 1000   -- sensor existence is model config, 1 s cache is plenty
+
+-- True while EdgeTX receives telemetry (any protocol).
+local function linkUp()
+  return getRSSI() ~= 0
+end
+
+-- Debounced loss: true once the link has been down for `grace` (same unit as `now`).
+-- state.linkLostSince is nil while the link is up.
+local function linkLost(state, up, now, grace)
+  if up then
+    state.linkLostSince = nil
+    return false
+  end
+  state.linkLostSince = state.linkLostSince or now
+  return now - state.linkLostSince >= grace
 end
 
 -- ---------------------------------------------------------------------------
@@ -305,9 +335,9 @@ function M.newState()
     -- plays immediately, an unchanged stage repeats on REPEAT_MS.
     announcedStage = 0,
     lastPlay       = 0,
-    -- linkLostSince marks when telemetry first went away (0 = link present); drives
+    -- linkLostSince marks when telemetry first went away (nil = link present); drives
     -- the brief-gap grace before resetAll().
-    linkLostSince  = 0,
+    linkLostSince  = nil,
     -- cfgErrSince marks when the missing-sensor situation was first observed
     -- (drives the grace period); cfgErrLastPlay drives the repeat timer.
     cfgErrSince    = 0,
@@ -363,20 +393,21 @@ end
 -- ---------------------------------------------------------------------------
 -- Telemetry reading -- the single place that reads ALL sensors raw.
 -- ---------------------------------------------------------------------------
-function M.readSnapshot()
-  local S = M.SENSORS
+function M.readSnapshot(state, now)
+  local S   = M.SENSORS
+  local has = sensorsPresent(state, S, now, SENSOR_CHECK_MS)
   return {
-    rssiValid = getRSSI() ~= 0,              -- telemetry present at all
-    has1RSS   = sensorExists(S.rssi1),       -- mandatory-sensor existence
-    hasRQly   = sensorExists(S.rqly),
-    hasRFMD   = sensorExists(S.rfmd),
+    rssiValid = linkUp(),                    -- telemetry present at all
+    has1RSS   = has.rssi1,                   -- mandatory-sensor existence
+    hasRQly   = has.rqly,
+    hasRFMD   = has.rfmd,
     rfmd      = getValue(S.rfmd),
     rss1      = getValue(S.rssi1),
     rss2      = getValue(S.rssi2),           -- 0 when absent -> treated as single antenna
     rqly      = getValue(S.rqly),
-    ant       = readOptional(S.ant),         -- display-only -> nil when absent
-    tpwr      = readOptional(S.tpwr),
-    fm        = readOptional(S.fm),          -- string sensor
+    ant       = readPresent(has, S, "ant"),  -- display-only -> nil when absent
+    tpwr      = readPresent(has, S, "tpwr"),
+    fm        = readPresent(has, S, "fm"),   -- string sensor
   }
 end
 
@@ -391,15 +422,13 @@ function M.evaluate(state, snap, now)
   -- immediately: a brief gap must not wipe an active warning, or both stages re-debounce
   -- in parallel on reconnect and flash a spurious OK between WARNING and CRITICAL. Reset
   -- only once the loss persists LINK_LOSS_GRACE_MS.
+  local lost = linkLost(state, snap.rssiValid, now, M.PARAMS.LINK_LOSS_GRACE_MS)
   if not snap.rssiValid then
-    if state.linkLostSince == 0 then state.linkLostSince = now end
-    if (now - state.linkLostSince) >= M.PARAMS.LINK_LOSS_GRACE_MS then
-      resetAll(state)
-    end
-    result.status = "no_link"
+    if lost then resetAll(state) end
+    result.status   = "no_link"
+    result.linkLost = lost      -- grace elapsed -> widget shows NO LINK
     return result
   end
-  state.linkLostSince = 0   -- telemetry present again -> clear the loss timer
 
   -- 1RSS, RQly and RFMD are mandatory. After a grace period (to tolerate
   -- sensor-discovery delays) flag cfgerr -- the script cannot warn without them.
@@ -479,7 +508,7 @@ end
 -- ---------------------------------------------------------------------------
 function M.update(state, now)
   now = now or nowMs()
-  local snap   = M.readSnapshot()
+  local snap   = M.readSnapshot(state, now)
   local result = M.evaluate(state, snap, now)
   result.snapshot = snap
 

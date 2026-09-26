@@ -732,7 +732,7 @@ local function create(zone, opts)
   local ctx = {
     zone = zone, options = opts,
     lastTick = 0, errorStreak = 0, fatalError = false,
-    rangeSmoothed = nil, result = nil, lastRunning = nil, linkLostSince = nil,
+    rangeSmoothed = nil, result = nil, lastRunning = nil,
   }
   if core then ctx.state = core.newState() end
   return ctx
@@ -812,20 +812,16 @@ local function refresh(ctx, event, touchState)
       return
     end
 
-    -- NO LINK is debounced with core's own grace: hold the last good running tile
-    -- exactly as long as core holds the warning, then fall through to NO LINK.
+    -- NO LINK is debounced by core: hold the last good running tile exactly as
+    -- long as core holds the warning, then fall through to NO LINK.
     if r.status == "no_link" then
-      ctx.linkLostSince = ctx.linkLostSince or getTime()
-      if ctx.lastRunning
-         and (getTime() - ctx.linkLostSince) * 10 < core.PARAMS.LINK_LOSS_GRACE_MS then
+      if ctx.lastRunning and not r.linkLost then
         r = ctx.lastRunning
       else
         ctx.rangeSmoothed = nil   -- reset smoothing so the next connect snaps fresh
         drawNoLink(ctx, x0, y0, W, H)
         return
       end
-    else
-      ctx.linkLostSince = nil
     end
 
     -- running (live or held): derive display values, smooth the range bar, draw.
