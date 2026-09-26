@@ -118,6 +118,13 @@ local function dtext(x, y, text, color, flags)
   lcd.drawText(x, y, text, CUSTOM_COLOR + (flags or 0))
 end
 
+-- BOLD is a font-index step, not an attribute: only the standard font has a bold
+-- variant; added to any size flag it selects a different size.
+local function bold(flag)
+  if flag == 0 then return BOLD end
+  return 0
+end
+
 -- Font stages, largest -> smallest.
 local FONT_STEPS = { XXLSIZE, DBLSIZE, MIDSIZE, 0, SMLSIZE }
 local SMALLER    = { [XXLSIZE] = DBLSIZE, [DBLSIZE] = MIDSIZE,
@@ -147,11 +154,13 @@ end
 -- Largest font whose text fits in maxW x maxH. Dimension big numbers from
 -- a fixed reference string so "1%" never gets a bigger font than "100%".
 -- maxFont caps the largest step tried (e.g. MIDSIZE for the big percent).
-local function fitFont(text, maxW, maxH, maxFont)
+-- withBold measures each step as drawn with bold() applied.
+local function fitFont(text, maxW, maxH, maxFont, withBold)
   local capped = not maxFont
   for _, f in ipairs(FONT_STEPS) do
     if f == maxFont then capped = true end
-    if capped and textW(text, f) <= maxW and (not maxH or fontH(f) <= maxH) then return f end
+    local m = withBold and (f + bold(f)) or f
+    if capped and textW(text, m) <= maxW and (not maxH or fontH(m) <= maxH) then return f end
   end
   return SMLSIZE
 end
@@ -165,13 +174,6 @@ end
 local function drawKV(x, y, label, value)
   dtext(x, y, label, COLORS.muted, SMLSIZE)
   dtext(x + textW(label, SMLSIZE), y, value, COLORS.fg, SMLSIZE)
-end
-
--- BOLD works for every font EXCEPT the small one: SMLSIZE + BOLD makes EdgeTX
--- jump to the max font. So apply BOLD everywhere except SMLSIZE.
-local function bold(flag)
-  if flag == SMLSIZE then return 0 end
-  return BOLD
 end
 
 -- Fill color for the current stage: accent -> yellow -> red.
@@ -472,9 +474,10 @@ local function drawRangeBar(x, y, w, barH, d, sc)
   if barH < fontH(SMLSIZE) - sx(5) then return end
   local statusTxt = (d.stage >= 2 and "CRITICAL")
                  or (d.stage >= 1 and "WARNING") or "OK"
-  local stFlag = fitFont(statusTxt, w * 0.6, barH - sx(2))
+  local stFlag = fitFont(statusTxt, w * 0.6, barH - sx(2), nil, true)
+  stFlag = stFlag + bold(stFlag)
   drawSplitText(x + sx(4), vcenter(y, barH, stFlag), statusTxt,
-                stFlag + bold(stFlag), x + fillW, textOnStage(d.stage), COLORS.fg)
+                stFlag, x + fillW, textOnStage(d.stage), COLORS.fg)
 end
 
 -- Header label: module line once CRSF device-info arrived, brand until then.
@@ -832,7 +835,7 @@ local function refresh(ctx, event, touchState)
     drawMain(W, H, x0, y0, d)
   end)
   if not ok then
-    dtext(4, 4, "Widget error", COLORS.muted, SMLSIZE)
+    dtext(sx(4), sx(4), "Widget error", COLORS.muted, SMLSIZE)
   end
 
   -- Heartbeat: blink only on the live data tile, never on an error/status tile or during
