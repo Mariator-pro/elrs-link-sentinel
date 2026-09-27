@@ -810,7 +810,7 @@ local function refresh(ctx, event, touchState)
       return
     end
     if ctx.fatalError then
-      drawErrorTile(z, "Widget error", "Re-add or restart")
+      drawErrorTile(z, "Widget error", "Restart radio")
       return
     end
 
