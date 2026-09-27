@@ -142,12 +142,23 @@ local function fontH(flags)
   end
   return h
 end
+-- Width cache is capped: every new live value (distance, voltage ...) adds an
+-- entry, so it starts over once TEXT_W_MAX entries are stored.
+local TEXT_W_MAX = 200
+local textWCount = 0
 local function textW(text, flags)
   flags = flags or 0
   local byFlag = TEXT_W[flags]
   if not byFlag then byFlag = {}; TEXT_W[flags] = byFlag end
   local w = byFlag[text]
-  if not w then w = lcd.sizeText(text, flags); byFlag[text] = w end
+  if not w then
+    if textWCount >= TEXT_W_MAX then
+      TEXT_W, textWCount = {}, 0
+      byFlag = {}; TEXT_W[flags] = byFlag
+    end
+    w = lcd.sizeText(text, flags); byFlag[text] = w
+    textWCount = textWCount + 1
+  end
   return w
 end
 
@@ -776,13 +787,15 @@ local function refresh(ctx, event, touchState)
   COLORS = (ctx.options.Theme == 2) and LIGHT or DARK
   BRAND  = brandColor(ctx.options.Accent, ctx.options.AccentColor)
 
-  -- Background per theme.
+  -- Background per theme: Light gets a milky overlay. Transparency choice 1..6 =
+  -- 0..100 % see-through -> opacity 0..15 (15 = invisible); anything else = default.
   if not COLORS.transparent then
     lcd.drawFilledRectangle(0, 0, z.w, z.h, COLORS.panel)
   else
-    local trans = ctx.options.Transparency or 0
-    if trans > 0 then
-      lcd.drawFilledRectangle(0, 0, z.w, z.h, COLOR_THEME_PRIMARY2, 3 * trans)
+    local trans = ctx.options.Transparency
+    if type(trans) ~= "number" or trans < 1 or trans > 6 then trans = 3 end
+    if trans < 6 then
+      lcd.drawFilledRectangle(0, 0, z.w, z.h, COLOR_THEME_PRIMARY2, 3 * (trans - 1))
     end
   end
 
@@ -849,10 +862,10 @@ return {
   name       = "Sentinel",
   options    = {
     -- Theme dropdown (CHOICE labels are a nested table; the value is the 1-based
-    -- index, so default 1 = "Dark"; needs EdgeTX 2.11+). Transparency = milky overlay
-    -- 0-5 (default 2), applied in the Light theme only (Dark stays solid black).
+    -- index, so default 1 = "Dark"; needs EdgeTX 2.11+). Transparency = see-through
+    -- share of the milky overlay (default 40%), applied in the Light theme only (Dark stays solid black).
     { "Theme", CHOICE, 1, { "Dark", "Light" } },
-    { "Transparency", VALUE, 2, 0, 5 },
+    { "Transparency", CHOICE, 3, { "0%", "20%", "40%", "60%", "80%", "100%" } },
     -- Brand/heading colour. Accent: 1 Default (per-palette green), 2 Theme
     -- (COLOR_THEME_FOCUS), 3 Custom (AccentColor). AccentColor shows the native colour
     -- picker; only used when Accent = Custom, default = the original Dark lime.

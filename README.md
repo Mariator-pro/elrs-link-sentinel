@@ -157,7 +157,7 @@ All files are available in the matching folders of this repository, so just copy
 3. Add a widget to a free zone and pick **Sentinel** from the list.
 4. *(Optional)* Open the widget settings to adjust:
    - **Theme**: `Dark` / `Light`.
-   - **Transparency**: milky-overlay transparency level (light theme only).
+   - **Transparency**: how much of the radio theme shows through the milky background (light theme only): `0%` opaque, `100%` no overlay.
    - **Accent**: color of the heading / brand text: `Default` (the classic green), `Theme` (the focus color of your active EdgeTX theme), or `Custom` (pick any color via **AccentColor**).
 
 > 📐 **Recommended screen layouts:** EdgeTX names its widget-screen layouts `columns × rows` (e.g. `2×4` = 2 columns next to each other, 4 rows on top of each other → 8 zones). The Sentinel widget is designed for a **half-width** zone, so it looks best in the layouts with **2 columns**:
