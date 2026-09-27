@@ -44,6 +44,7 @@ M.PARAMS = {
   CFG_ERR_REPEAT_MS  = 30000,  -- Cfg-error sound repeat interval in ms
   HAPTIC             = false,  -- Vibrate alongside the warning sound (opt-in)
   HAPTIC_STRENGTH    = 2,      -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
+  SHOW_ARMED         = true,   -- Widget: ARMED in the range bar (display only)
 }
 
 -- playHaptic pulse length per strength tier. Stage 2 (critical) fires a second
@@ -89,6 +90,7 @@ M.DEFAULTS = {
   rqlyThreshold  = M.PARAMS.RQLY_THRESHOLD,
   haptic         = M.PARAMS.HAPTIC,
   hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
+  showArmed      = M.PARAMS.SHOW_ARMED,
   stage1Sound    = M.SOUNDS.stage1,
   stage2Sound    = M.SOUNDS.stage2,
 }
@@ -149,6 +151,7 @@ function M.normalizeConfig(cfg)
     haptic         = boolOr(cfg.haptic, DEFAULTS.haptic),
     hapticStrength = clampNum(cfg.hapticStrength,
                        L.HAPTIC_STRENGTH.min, L.HAPTIC_STRENGTH.max, DEFAULTS.hapticStrength),
+    showArmed      = boolOr(cfg.showArmed, DEFAULTS.showArmed),
     sounds = { stage1 = soundOr(snd.stage1, nil), stage2 = soundOr(snd.stage2, nil) },
   }
 end
@@ -161,6 +164,7 @@ function M.applyConfigOverrides(cfg)
   M.PARAMS.RQLY_THRESHOLD  = n.rqlyThreshold
   M.PARAMS.HAPTIC          = n.haptic
   M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
+  M.PARAMS.SHOW_ARMED      = n.showArmed
   M.SOUNDS.stage1 = (n.sounds.stage1 == nil) and DEFAULTS.stage1Sound or n.sounds.stage1
   M.SOUNDS.stage2 = (n.sounds.stage2 == nil) and DEFAULTS.stage2Sound or n.sounds.stage2
 end

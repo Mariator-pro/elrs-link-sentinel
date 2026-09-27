@@ -82,7 +82,7 @@ The warning logic lives in a shared core module (`core.lua`). On top of it sit t
     <tr>
       <td>Visual link display</td>
       <td>❌</td>
-      <td>✅ (range %, RF mode, RSSI, LQ, TX power, FC flight mode, active antenna, ELRS module + firmware)</td>
+      <td>✅ (range %, RF mode, RSSI, LQ, TX power, FC flight mode, armed status, active antenna, ELRS module + firmware)</td>
     </tr>
     <tr>
       <td>Runs in the background</td>
@@ -191,6 +191,7 @@ To adjust the warning thresholds and pick custom sounds, use the bundled **setti
   - **Test**: plays the row's currently selected sound so you can compare them on the spot.
 - **Haptic feedback**: vibrate alongside the warning tones (needs a radio with a vibration motor). Off by default; turn it `On` to add a pulse for Stage 1 and a stronger double pulse for Stage 2.
   - **Haptic strength**: pulse-length tier (`Soft` / `Normal` / `Strong`, default `Normal`). Only shown while haptic feedback is on.
+- **Show armed status**: show `ARMED` in the widget's range bar while the flight controller is armed. On by default.
 - **Reset config** restores the defaults.
 - **About**: version and the paths the project uses.
 

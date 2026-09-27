@@ -671,7 +671,7 @@ local function handleConfigError(e)
   S.cursor = moveCursor(S.cursor, e, 2)
   if isEnter(e) then
     if S.cursor == 1 then
-      openDialog("Reset settings to factory defaults? Only warnings, sounds and haptic change.",
+      openDialog("Reset all settings to factory defaults?",
                  function() resetConfig(function() S.screen = SCREEN.MAIN; S.cursor = 1 end) end)
     else
       return 1
@@ -706,6 +706,7 @@ local function enterSettings()
     rqly    = S.cfg.rqlyThreshold,
     haptic  = S.cfg.haptic,
     hapStr  = S.cfg.hapticStrength,
+    armed   = S.cfg.showArmed,
     s1Idx   = soundOptionIndex(S.sndS1Opts, snd.stage1),
     s2Idx   = soundOptionIndex(S.sndS2Opts, snd.stage2),
   }
@@ -805,9 +806,10 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Top-level rows: Stage 1 (1), Stage 2 (2), Haptic on/off (3), Haptic strength (4),
--- reset-config (5), Back (6), Save (7). ENTER on a Stage row dives in; the roller
--- then steps its cells (SET_SUBS) and ENTER edits/opens the picker/plays the focused one.
-local SET_ITEMS = 7
+-- Show armed status on/off (5), reset-config (6), Back (7), Save (8). ENTER on a
+-- Stage row dives in; the roller then steps its cells (SET_SUBS) and ENTER
+-- edits/opens the picker/plays the focused one.
+local SET_ITEMS = 8
 local SET_SUBS      = { "thr", "snd", "test" }
 local SET_SUBS_MUTE = { "thr", "snd" }   -- Test dropped when the sound is Off
 
@@ -839,6 +841,7 @@ local function settingsDirty()
       or S.set.rqly   ~= S.cfg.rqlyThreshold
       or S.set.haptic ~= S.cfg.haptic
       or S.set.hapStr ~= S.cfg.hapticStrength
+      or S.set.armed  ~= S.cfg.showArmed
       or soundConfigValue(S.sndS1Opts, S.set.s1Idx) ~= snd.stage1
       or soundConfigValue(S.sndS2Opts, S.set.s2Idx) ~= snd.stage2
 end
@@ -853,6 +856,7 @@ local function saveSettings()
   S.cfg.rqlyThreshold  = S.set.rqly
   S.cfg.haptic         = S.set.haptic
   S.cfg.hapticStrength = S.set.hapStr
+  S.cfg.showArmed      = S.set.armed
   S.cfg.sounds.stage1 = soundConfigValue(S.sndS1Opts, S.set.s1Idx)
   S.cfg.sounds.stage2 = soundConfigValue(S.sndS2Opts, S.set.s2Idx)
   withRetry(function() return saveConfig(S.cfg) end, leaveSettings)
@@ -890,7 +894,7 @@ local function drawStageRow(r, row, y)
 end
 
 -- A "label value" row edited in place like the thresholds: value blinks while
--- editing, inverted when only selected (the Haptic rows).
+-- editing, inverted when only selected (the Haptic and Show armed status rows).
 local function drawChoiceRow(y, label, value, selected, editing)
   lcd.drawText(COL1, y, label, COLOR_THEME_PRIMARY1)
   local f = COLOR_THEME_PRIMARY1
@@ -933,7 +937,9 @@ local function drawSettings()
     rows[#rows + 1] = function(y) drawChoiceRow(y, "Haptic strength", HAPTIC.labels[S.set.hapStr] or "Normal",
                         S.cursor == 4, S.setEditing and S.setField == "hapStr") end
   end
-  rows[#rows + 1] = function(y) drawButton(PAD, y, "Reset to defaults", S.cursor == 5) end
+  rows[#rows + 1] = function(y) drawChoiceRow(y, "Show armed status", S.set.armed and "On" or "Off",
+                      S.cursor == 5, S.setEditing and S.setField == "armed") end
+  rows[#rows + 1] = function(y) drawButton(PAD, y, "Reset to defaults", S.cursor == 6) end
 
   -- Viewport: first body row down to the bar separator.
   local top0    = bodyY(1)
@@ -942,11 +948,11 @@ local function drawSettings()
   local rowsFit = math.max(1, math.floor((sepY - top0) / LINE))
 
   -- Content row = cursor + 1 (header is row 1): the hint exists only while a Stage
-  -- is focused, always before the Haptic/Reset rows, so those never shift. On the
+  -- is focused, always before the Haptic/armed/Reset rows, so those never shift. On the
   -- Back/Save bar show the list bottom. Focus is centred + clamped to stay visible.
   local focus = S.cursor + 1
   if not S.set.haptic and S.cursor >= 4 then focus = focus - 1 end   -- strength row hidden
-  focus = (S.cursor <= 5) and focus or nRows
+  focus = (S.cursor <= 6) and focus or nRows
   local start = math.max(1, math.min(focus - math.floor(rowsFit / 2),
                                      nRows - rowsFit + 1))
 
@@ -958,19 +964,19 @@ local function drawSettings()
   -- Scrollbar when the list overflows the viewport.
   if nRows > rowsFit then drawScrollbar(LCD_W - 4, top0, rowsFit, start, nRows) end
 
-  drawButtonBar({ "Back", "Save" }, 6, S.cursor)
+  drawButtonBar({ "Back", "Save" }, 7, S.cursor)
 end
 
 local function handleSettings(e)
   if S.setEditing then
     local field = S.setField
-    if field == "haptic" then
+    if field == "haptic" or field == "armed" then
       if isNext(e) or isPrev(e) then
-        S.set.haptic = not S.set.haptic           -- both directions just toggle
+        S.set[field] = not S.set[field]           -- both directions just toggle
       elseif isEnter(e) then
         S.setEditing = false
       elseif isExit(e) then
-        S.set.haptic = S.setOrig                   -- cancel edit
+        S.set[field] = S.setOrig                   -- cancel edit
         S.setEditing = false
       end
     else
@@ -1047,11 +1053,13 @@ local function handleSettings(e)
     elseif S.cursor == 4 then
       S.setField, S.setEditing, S.setOrig = "hapStr", true, S.set.hapStr
     elseif S.cursor == 5 then
-      openDialog("Reset settings to factory defaults? Only warnings, sounds and haptic change.",
-                 function() resetConfig(function() enterSettings() end) end)
+      S.setField, S.setEditing, S.setOrig = "armed", true, S.set.armed
     elseif S.cursor == 6 then
-      cancelSettings()   -- Back (discard with confirm if dirty)
+      openDialog("Reset all settings to factory defaults?",
+                 function() resetConfig(function() enterSettings() end) end)
     elseif S.cursor == 7 then
+      cancelSettings()   -- Back (discard with confirm if dirty)
+    elseif S.cursor == 8 then
       saveSettings()
     end
   elseif isExit(e) then

@@ -220,10 +220,35 @@ end
 -- core's warning decision does not use ANT.
 --   stage : 0 = OK, 1 = WARNING, 2 = CRITICAL
 -- ---------------------------------------------------------------------------
+-- Disarmed marker in the FC's FM text: Betaflight appends * ! ?, ArduPilot/MAVLink *,
+-- INAV sends OK / WAIT / !ERR. "!FS!" (failsafe) counts as armed.
+local function fmDisarmed(fm)
+  if type(fm) ~= "string" or fm == "" or fm == "!FS!" then return false end
+  if fm == "OK" or fm == "WAIT" or fm == "!ERR" then return true end
+  local last = string.sub(fm, -1)
+  return last == "*" or last == "!" or last == "?"
+end
+
+-- Armed only once a disarmed marker was seen on this link: some setups (ArduPilot
+-- without the disarm star) never send one, so a marker-less text alone proves nothing.
+local function fmArmed(ctx, fm)
+  return ctx.disarmSeen == true and type(fm) == "string" and fm ~= ""
+     and not fmDisarmed(fm)
+end
+
+-- ARMED blinks three times (250 ms off/on) right after arming, then stays.
+local ARM_BLINK_HALF, ARM_BLINKS = 25, 3   -- getTime ticks, blink count
+local function armBlinkOff(since)
+  if not since then return false end
+  local k = math.floor((getTime() - since) / ARM_BLINK_HALF)
+  return k < 2 * ARM_BLINKS and k % 2 == 1
+end
+
 local function buildDisplay(ctx, r)
   local snap = r.snapshot
   local ant  = snap.ant                              -- 0/1, or nil (no ANT sensor)
   return {
+    armed     = core.PARAMS.SHOW_ARMED and fmArmed(ctx, snap.fm) and not armBlinkOff(ctx.armedAt),
     stage     = r.stage,
     rfmode    = r.modeName or tostring(snap.rfmd),    -- raw number if name unknown
     sensLimit = r.sensLimit,
@@ -349,14 +374,19 @@ local function drawNoRxStatus(cx, y)
   if n > 0 then dtext(startX + baseW, y, string.rep(".", n), COLORS.muted, SMLSIZE) end
 end
 
--- Blinking red dot, top-right (0.5 Hz), shown while telemetry is arriving -- a
--- live "fresh packets + script running" sign that stops the instant packets do.
-local HEARTBEAT_HALF = 100   -- getTime ticks: 1 s on / 1 s off
+-- Pulsing red dot, top-right (fades in and out every 2 s); the caller draws it only
+-- while telemetry is arriving. drawFilledCircle has no opacity, so the colour is
+-- blended by hand between the background and red (light theme: white, the real
+-- background there depends on the radio theme).
+local HEARTBEAT_PERIOD = 200   -- getTime ticks
+local HEARTBEAT_RED    = { 220, 40, 40 }
+local HEARTBEAT_BG     = { dark = { 18, 20, 18 }, light = { 255, 255, 255 } }
 local function drawHeartbeat(ctx)
-  if math.floor(getTime() / HEARTBEAT_HALF) % 2 ~= 0 then return end
-  local z = ctx.zone
+  local t  = 0.5 - 0.5 * math.cos(2 * math.pi * (getTime() % HEARTBEAT_PERIOD) / HEARTBEAT_PERIOD)
+  local bg = COLORS.transparent and HEARTBEAT_BG.light or HEARTBEAT_BG.dark
+  local function mix(i) return math.floor(bg[i] + (HEARTBEAT_RED[i] - bg[i]) * t + 0.5) end
   local r = sx(3)
-  lcd.drawFilledCircle(z.w - sx(4) - r, sx(4) + r, r, CRIT_COL)
+  lcd.drawFilledCircle(ctx.zone.w - sx(4) - r, sx(4) + r, r, lcd.RGB(mix(1), mix(2), mix(3)))
 end
 
 -- ---------------------------------------------------------------------------
@@ -495,6 +525,14 @@ local function drawRangeBar(x, y, w, barH, d, sc)
   stFlag = stFlag + bold(stFlag)
   drawSplitText(x + sx(4), vcenter(y, barH, stFlag), statusTxt,
                 stFlag, x + fillW, textOnStage(d.stage), COLORS.fg)
+  if d.armed then
+    -- Small, right-aligned, dropped when it would touch the status word.
+    local armX = x + w - sx(4) - textW("ARMED", SMLSIZE)
+    if armX >= x + sx(4) + textW(statusTxt, stFlag) + sx(8) then
+      drawSplitText(armX, vcenter(y, barH, SMLSIZE), "ARMED", SMLSIZE,
+                    x + fillW, textOnStage(d.stage), COLORS.fg)
+    end
+  end
 end
 
 -- Header label: module line once CRSF device-info arrived, brand until then.
@@ -757,7 +795,7 @@ local function create(zone, opts)
   local ctx = {
     zone = zone, options = opts,
     lastTick = 0, errorStreak = 0, fatalError = false,
-    rangeSmoothed = nil, result = nil, lastRunning = nil,
+    rangeSmoothed = nil, result = nil, lastRunning = nil, disarmSeen = nil, armedAt = nil,
   }
   if core then ctx.state = core.newState() end
   return ctx
@@ -779,7 +817,14 @@ local function tick(ctx)
   local ok, res = pcall(core.update, ctx.state)
   if ok then
     ctx.result      = res
-    if res.status == "running" then ctx.lastRunning = res end  -- held during a brief dropout
+    if res.status == "running" then
+      ctx.lastRunning = res                                      -- held during a brief dropout
+      if fmDisarmed(res.snapshot.fm) then ctx.disarmSeen = true end
+      if not fmArmed(ctx, res.snapshot.fm) then ctx.armedAt = nil
+      elseif not ctx.armedAt then ctx.armedAt = now end          -- arm edge: starts the blink
+    elseif res.linkLost then
+      ctx.disarmSeen = nil                                       -- new link, new proof needed
+    end
     ctx.errorStreak = 0
   else
     ctx.errorStreak = ctx.errorStreak + 1
