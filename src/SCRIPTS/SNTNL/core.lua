@@ -67,7 +67,7 @@ M.SOUNDS = {
 -- Exported: the Tools-Script (the config WRITER) reads path and schema version
 -- from here, so writer and reader can never drift apart. VERSION lives here too,
 -- so the About page always names the core that actually runs.
-M.VERSION               = "2.1.1"
+M.VERSION               = "2.2.0"
 M.CONFIG_PATH           = "/SCRIPTS/SNTNL/config.lua"
 M.CONFIG_SCHEMA_VERSION = 1
 

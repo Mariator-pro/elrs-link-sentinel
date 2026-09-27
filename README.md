@@ -33,8 +33,8 @@ A small EdgeTX project that watches your ExpressLRS link in the background and a
 
 | Component | Minimum Version | Tested On | Test Hardware |
 |-----------|-----------------|-----------|---------------|
-| EdgeTX    | v2.11           | v2.12.0   | Radiomaster TX15, Radiomaster TX16S MK3 |
-| ExpressLRS| v4.0.0          | v4.0.0    | Radiomaster RP1 V2, RP3 V2, RP4TD |
+| EdgeTX    | v2.11           | v2.12.4   | Radiomaster TX15, Radiomaster TX16S MK3 |
+| ExpressLRS| v4.0.0          | v4.1.0    | Radiomaster RP1 V2, RP3 V2, RP4TD |
 
 > Flight controllers (Betaflight, INAV, ArduPilot) and the settings they need: see [`docs/compatibility.md`](docs/compatibility.md).
 >
