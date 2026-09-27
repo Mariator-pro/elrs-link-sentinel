@@ -231,7 +231,7 @@ local function buildDisplay(ctx, r)
     linkRssi  = r.linkRssi,                              -- range bar: governing (stronger) antenna
     antNum    = (ant == 1) and 2 or 1,
     tpwr      = snap.tpwr,                            -- nil -> "--"
-    fm        = snap.fm,                              -- nil -> "--"
+    fm        = snap.fm ~= "" and snap.fm or nil,     -- nil or empty -> "--"
     rqly      = snap.rqly,
     modLine   = ctx.modLine,                          -- CRSF device-info line (nil until detected)
   }
@@ -273,6 +273,7 @@ local ADDR_BROADCAST   = 0x00
 local ADDR_RADIO       = 0xEA   -- the handset
 local ADDR_TX_MODULE   = 0xEE   -- the ELRS TX module (only sender we accept)
 local DEV_PING_PERIOD  = 100    -- getTime ticks (1 s) between active pings
+local MAX_POPS_PER_TICK = 16    -- drains the 256-byte queue faster than frames arrive
 
 -- Read a null-terminated CRSF string from byte array `b` starting at index
 -- `from`. Returns the decoded string and the index just past the terminator.
@@ -298,14 +299,19 @@ local function parseDeviceInfo(ctx, b)
   end
 end
 
--- Drain one incoming CRSF frame; while the module is still unknown, actively
+-- Drain the incoming CRSF frames; while the module is still unknown, actively
 -- ping once per second. Once known we stop pinging -- EdgeTX keeps polling, so
 -- a module swap is still picked up.
 local function pollDeviceInfo(ctx)
   if not crossfireTelemetryPop then return end   -- no CRSF on this radio
-  local cmd, data = crossfireTelemetryPop()
-  if cmd == CRSF_DEVICE_INFO then
-    parseDeviceInfo(ctx, data)
+  -- Drain all queued frames: others (e.g. passthrough telemetry) would otherwise
+  -- fill the queue and the module's reply would be dropped.
+  for _ = 1, MAX_POPS_PER_TICK do
+    local cmd, data = crossfireTelemetryPop()
+    if cmd == nil then break end
+    if cmd == CRSF_DEVICE_INFO then
+      parseDeviceInfo(ctx, data)
+    end
   end
   if not ctx.modLine then
     local now = getTime()
@@ -535,8 +541,13 @@ end
 local function drawInfoGrid(x0, W, r1y, r2y, barY, d)
   local c1x, c2x, c3x, col3 = drawInfoRow1(x0, W, r1y, d)
   drawKV(c1x, r2y, "TX ", d.tpwr and (d.tpwr .. " mW") or "--")
-  drawKV(c2x, r2y, "FM ", d.fm or "--")
-  drawLqBar(c3x, barY, col3 - sx(2), d.rqly)
+  local fm = d.fm or "--"
+  drawKV(c2x, r2y, "FM ", fm)
+  -- A flight mode wider than its column (e.g. ArduPilot "MANU*") may run into
+  -- column 3: the LQ bar is dropped then, LQ stays readable in row 1.
+  if c2x + textW("FM ", SMLSIZE) + textW(fm, SMLSIZE) <= c3x then
+    drawLqBar(c3x, barY, col3 - sx(2), d.rqly)
+  end
 end
 
 -- Caption on the percent baseline: "MODE <rfmode>" right-aligned (priority), the

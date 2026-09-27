@@ -36,6 +36,10 @@ A small EdgeTX project that watches your ExpressLRS link in the background and a
 | EdgeTX    | v2.11           | v2.12.0   | Radiomaster TX15, Radiomaster TX16S MK3 |
 | ExpressLRS| v4.0.0          | v4.0.0    | Radiomaster RP1 V2, RP3 V2, RP4TD |
 
+> Flight controllers (Betaflight, INAV, ArduPilot) and the settings they need: see [`docs/compatibility.md`](docs/compatibility.md).
+>
+> 🙋 **Help wanted:** INAV and ArduPilot are not tested on real hardware yet. If you fly one of them, a test would help a lot. Any feedback, working or not, is welcome: please [open an issue](../../issues).
+
 ---
 
 ## 🎯 What is it for?
@@ -199,6 +203,7 @@ Press **Save** to write the settings. They land in `/SCRIPTS/SNTNL/config.lua`, 
 - **Script doesn't show up when picking it for the Special Function:** Check the file name. It must be exactly `sntnl.lua` (max. 6 characters, otherwise EdgeTX hides function scripts).
 - **Widget shows "Core missing / Reinstall SNTNL", or the function script errors on load:** `core.lua` is not where it should be. Make sure `/SCRIPTS/SNTNL/core.lua` exists on the SD card, since both variants depend on it.
 - **Widget shows "Sensor missing / Discover in EdgeTX" (and the config-error tone plays):** One of the mandatory sensors (`RFMD`, `1RSS`, `RQly`) is missing. Run a telemetry discovery on the radio while the link is up.
+- **Widget shows `FM --` while everything else works:** The flight mode comes from the flight controller's telemetry, not from ExpressLRS. Warnings and the link display are not affected. Enable telemetry on the flight controller (INAV: `feature TELEMETRY`), see [`docs/compatibility.md`](docs/compatibility.md#setup).
 - **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/SNTNL/` (the `en/` folder is mandatory even if your radio is set to another language). The quickest check is the settings tool: press **Test** on a stage to play its tone directly, which confirms the file is found and your radio's volume is up.
 - **Permanent warning / range shows "--" despite good reception:** Your ELRS setup is probably using a mode whose sensitivity limit isn't yet listed in `core.lua`. Please [open an issue](../../issues) so it can be added.
 
