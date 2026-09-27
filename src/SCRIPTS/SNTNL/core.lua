@@ -171,9 +171,10 @@ end
 -- with no per-tick file I/O. Fully fault tolerant: a missing or broken file simply
 -- leaves the hard-coded defaults in force. loadScript is the documented EdgeTX way
 -- to load a Lua file (nil when missing/broken) and does not exist on desktop, so
--- the unit tests are unaffected.
+-- the unit tests are unaffected. Text only, no .luac (mode "tx"): the radio would
+-- prefer a compiled copy with the same 2 s FAT timestamp over a newer file.
 local function loadConfigOnce()
-  local chunk = loadScript and loadScript(M.CONFIG_PATH)
+  local chunk = loadScript and loadScript(M.CONFIG_PATH, "tx")
   if not chunk then return end                             -- no config -> defaults
   local ok, result = pcall(chunk)
   if not ok or type(result) ~= "table" then return end     -- parse error -> defaults

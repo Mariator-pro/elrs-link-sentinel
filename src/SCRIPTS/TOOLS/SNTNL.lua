@@ -175,9 +175,10 @@ local function loadConfig()
   pcall(io.close, f)
 
   -- loadScript instead of dofile: the documented EdgeTX loader; the file exists
-  -- (probe above), so a nil/raising load here is a broken file -> "parse".
-  local cok, chunk = pcall(loadScript, PATHS.config)
-  if not cok or not chunk then return nil, "parse", tostring(chunk) end
+  -- (probe above), so a nil/raising load here is a broken file -> "parse". Text
+  -- only, no .luac: a compiled copy with the same 2 s FAT timestamp would win.
+  local cok, chunk, err = pcall(loadScript, PATHS.config, "tx")
+  if not cok or not chunk then return nil, "parse", tostring(err or chunk) end
   local pok, result = pcall(chunk)
   if not pok then return nil, "parse", tostring(result) end
   if type(result) ~= "table" then return nil, "parse", "not a table" end
