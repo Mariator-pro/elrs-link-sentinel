@@ -53,10 +53,6 @@ local RANGE_STEP_SMALL = 1
 local RANGE_STEP_BIG   = 4
 local RANGE_JUMP       = 8
 
--- LQ mini-bar: green at/above this %, yellow down to core's RQLY_THRESHOLD, red
--- below. Only green->yellow is display-only; the red end ties to the shared threshold.
-local LQ_OK_PCT = 70
-
 -- ---------------------------------------------------------------------------
 -- Color palettes. Set per frame from the Theme option. Escalation colors are
 -- theme-independent.
@@ -220,35 +216,10 @@ end
 -- core's warning decision does not use ANT.
 --   stage : 0 = OK, 1 = WARNING, 2 = CRITICAL
 -- ---------------------------------------------------------------------------
--- Disarmed marker in the FC's FM text: Betaflight appends * ! ?, ArduPilot/MAVLink *,
--- INAV sends OK / WAIT / !ERR. "!FS!" (failsafe) counts as armed.
-local function fmDisarmed(fm)
-  if type(fm) ~= "string" or fm == "" or fm == "!FS!" then return false end
-  if fm == "OK" or fm == "WAIT" or fm == "!ERR" then return true end
-  local last = string.sub(fm, -1)
-  return last == "*" or last == "!" or last == "?"
-end
-
--- Armed only once a disarmed marker was seen on this link: some setups (ArduPilot
--- without the disarm star) never send one, so a marker-less text alone proves nothing.
-local function fmArmed(ctx, fm)
-  return ctx.disarmSeen == true and type(fm) == "string" and fm ~= ""
-     and not fmDisarmed(fm)
-end
-
--- ARMED blinks three times (250 ms off/on) right after arming, then stays.
-local ARM_BLINK_HALF, ARM_BLINKS = 25, 3   -- getTime ticks, blink count
-local function armBlinkOff(since)
-  if not since then return false end
-  local k = math.floor((getTime() - since) / ARM_BLINK_HALF)
-  return k < 2 * ARM_BLINKS and k % 2 == 1
-end
-
 local function buildDisplay(ctx, r)
   local snap = r.snapshot
   local ant  = snap.ant                              -- 0/1, or nil (no ANT sensor)
   return {
-    armed     = core.PARAMS.SHOW_ARMED and fmArmed(ctx, snap.fm) and not armBlinkOff(ctx.armedAt),
     stage     = r.stage,
     rfmode    = r.modeName or tostring(snap.rfmd),    -- raw number if name unknown
     sensLimit = r.sensLimit,
@@ -258,17 +229,8 @@ local function buildDisplay(ctx, r)
     tpwr      = snap.tpwr,                            -- nil -> "--"
     fm        = snap.fm ~= "" and snap.fm or nil,     -- nil or empty -> "--"
     rqly      = snap.rqly,
-    modLine   = ctx.modLine,                          -- CRSF device-info line (nil until detected)
+    modLine   = ctx.state.modLine,                    -- CRSF device-info line (nil until detected)
   }
-end
-
--- Range budget in % (0..100) from linkRssi against the mode's raw sensitivity
--- limit. nil for a placeholder/unknown mode (sensLimit == 0) -> bar full + "--".
-local function rangeTarget(rss, sensLimit)
-  if not sensLimit or sensLimit == 0 then return nil end
-  local pct = 100 * (rss + 50) / (sensLimit + 50)
-  if pct < 0 then return 0 elseif pct > 100 then return 100 end
-  return pct
 end
 
 -- Anti-flicker smoothing, refresh-paced: +-1%/frame, +-4% when far (>8%).
@@ -289,62 +251,19 @@ local function smoothRange(ctx, target)
 end
 
 -- ---------------------------------------------------------------------------
--- CRSF device-info (cosmetic header: module name + firmware). Ping the module,
--- parse its device-info reply. Frame types / addresses / layout are fixed by CRSF.
+-- CRSF queue: this widget's own copy of the incoming frames. Drained here once per
+-- tick and handed to the core, which keeps the module line (cosmetic header).
 -- ---------------------------------------------------------------------------
-local CRSF_PING        = 0x28   -- ping devices (request)
-local CRSF_DEVICE_INFO = 0x29   -- device info (reply)
-local ADDR_BROADCAST   = 0x00
-local ADDR_RADIO       = 0xEA   -- the handset
-local ADDR_TX_MODULE   = 0xEE   -- the ELRS TX module (only sender we accept)
-local DEV_PING_PERIOD  = 100    -- getTime ticks (1 s) between active pings
 local MAX_POPS_PER_TICK = 16    -- drains the 256-byte queue faster than frames arrive
 
--- Read a null-terminated CRSF string from byte array `b` starting at index
--- `from`. Returns the decoded string and the index just past the terminator.
-local function crsfReadString(b, from)
-  local out, i = {}, from
-  while b[i] and b[i] ~= 0 do
-    out[#out + 1] = string.char(b[i])
-    i = i + 1
-  end
-  return table.concat(out), i + 1
-end
-
--- Decode a device-info payload into ctx.modLine. Accept only frames from
--- the TX module; everything else (e.g. a receiver) is ignored.
-local function parseDeviceInfo(ctx, b)
-  if not b or b[2] ~= ADDR_TX_MODULE then return end
-  local name, p = crsfReadString(b, 3)
-  -- payload after the name: serial(4) + hardware(4) + software(4); the
-  -- firmware version is the last three bytes of the software field.
-  local maj, min, rev = b[p + 9], b[p + 10], b[p + 11]
-  if name ~= "" and maj and min and rev then
-    ctx.modLine = string.format("%s (v%d.%d.%d)", name, maj, min, rev)
-  end
-end
-
--- Drain the incoming CRSF frames; while the module is still unknown, actively
--- ping once per second. Once known we stop pinging -- EdgeTX keeps polling, so
--- a module swap is still picked up.
-local function pollDeviceInfo(ctx)
+local function pollFrames(ctx)
   if not crossfireTelemetryPop then return end   -- no CRSF on this radio
-  -- Drain all queued frames: others (e.g. passthrough telemetry) would otherwise
-  -- fill the queue and the module's reply would be dropped.
   for _ = 1, MAX_POPS_PER_TICK do
     local cmd, data = crossfireTelemetryPop()
     if cmd == nil then break end
-    if cmd == CRSF_DEVICE_INFO then
-      parseDeviceInfo(ctx, data)
-    end
+    core.handleFrame(ctx.state, cmd, data)
   end
-  if not ctx.modLine then
-    local now = getTime()
-    if now - (ctx.lastDevPing or 0) > DEV_PING_PERIOD then
-      crossfireTelemetryPush(CRSF_PING, { ADDR_BROADCAST, ADDR_RADIO })
-      ctx.lastDevPing = now
-    end
-  end
+  core.pollModule(ctx.state)
 end
 
 -- ---------------------------------------------------------------------------
@@ -401,30 +320,36 @@ end
 -- shrink/grow the title by a font step.
 local TITLE_SIZE_REF = string.rep("M", 8)
 
-local function drawNoLink(ctx, x0, y0, W, H)
+local function drawNoLink(ctx)
+  -- Laid out on the whole zone like the sibling widgets' splash tiles: title one
+  -- font step below the 8-M anchor, status line plus a third line (the module
+  -- line, reserved while still unknown), the block centred vertically.
+  local z       = ctx.zone
   local title   = "LINK-SENTINEL"
-  local tFlag   = SMALLER[fitFont(TITLE_SIZE_REF, W * 0.95, H * 0.5)]
+  local tFlag   = SMALLER[fitFont(TITLE_SIZE_REF, math.floor(z.w * 0.95), math.floor(z.h * 0.5))]
   local tH      = fontH(tFlag)
   local sH      = fontH(SMLSIZE)
-  local gap     = sx(4)
+  local gap, lineGap = sx(4), sx(2)
+  local blockH  = sH + lineGap + sH
+  local avail   = z.h - 2 * sx(4)
   local modLine = ctx.modLine
-  local modH    = modLine and (sx(2) + sH) or 0
-  local cx      = x0 + math.floor(W / 2)
+  local cx      = math.floor(z.w / 2)
 
-  -- Status block (animated "No RX" line + optional module line), top at sy.
   local function drawStatusBlock(sy)
     drawNoRxStatus(cx, sy)
     if modLine then
-      dtext(cx, sy + sH + sx(2), modLine, COLORS.muted, SMLSIZE + CENTER)
+      dtext(cx, sy + sH + lineGap, modLine, COLORS.muted, SMLSIZE + CENTER)
     end
   end
 
-  if H >= tH + gap + sH + modH then
-    local by = y0 + math.floor((H - (tH + gap + sH + modH)) / 2)
-    dtext(cx, by, title, BRAND, tFlag + CENTER)
-    drawStatusBlock(by + tH + gap)
+  if avail >= tH + gap + blockH then
+    local top = math.floor((z.h - (tH + gap + blockH)) / 2)
+    dtext(cx, top, title, BRAND, tFlag + CENTER)
+    drawStatusBlock(top + tH + gap)
+  elseif avail >= blockH then
+    drawStatusBlock(math.floor((z.h - blockH) / 2))
   else
-    drawStatusBlock(y0 + math.floor((H - (sH + modH)) / 2))
+    drawNoRxStatus(cx, math.floor((z.h - sH) / 2))
   end
 end
 
@@ -475,9 +400,12 @@ end
 -- Returns the header-band height it occupies.
 local function drawBrandHeading(z)
   local pad = sx(4)
-  dtext(pad, pad, "LINK-SENTINEL", BRAND, SMLSIZE)
-  local hw, hh   = textW("LINK-SENTINEL", SMLSIZE), fontH(SMLSIZE)
-  local eyeX, eyeW = pad + hw + sx(6), sx(20)
+  local hh, sq = fontH(SMLSIZE), sx(5)   -- accent square + title as on GPS Homer
+  lcd.drawFilledRectangle(pad, pad + math.floor((hh - sq) / 2), sq, sq, BRAND)
+  local tx = pad + sq + sx(3)
+  dtext(tx, pad, "LINK-SENTINEL", BRAND, SMLSIZE)
+  local hw = textW("LINK-SENTINEL", SMLSIZE)
+  local eyeX, eyeW = tx + hw + sx(6), sx(20)
   if eyeX + eyeW <= z.w then
     drawMascotEyes(eyeX, pad, eyeW, math.max(hh, sx(14)))
   end
@@ -525,14 +453,6 @@ local function drawRangeBar(x, y, w, barH, d, sc)
   stFlag = stFlag + bold(stFlag)
   drawSplitText(x + sx(4), vcenter(y, barH, stFlag), statusTxt,
                 stFlag, x + fillW, textOnStage(d.stage), COLORS.fg)
-  if d.armed then
-    -- Small, right-aligned, dropped when it would touch the status word.
-    local armX = x + w - sx(4) - textW("ARMED", SMLSIZE)
-    if armX >= x + sx(4) + textW(statusTxt, stFlag) + sx(8) then
-      drawSplitText(armX, vcenter(y, barH, SMLSIZE), "ARMED", SMLSIZE,
-                    x + fillW, textOnStage(d.stage), COLORS.fg)
-    end
-  end
 end
 
 -- Header label: module line once CRSF device-info arrived, brand until then.
@@ -551,14 +471,13 @@ local function gridCols(x0, W)
   return c1x, c2x, c3x, (x0 + W) - c3x
 end
 
--- LQ mini bar, colour by quality: green at/above LQ_OK_PCT, yellow down to the
--- shared core threshold (not hard-coded), red below.
+-- LQ mini bar, colour by quality from the core (core.lqLevel).
 local LQ_BAR_H = sx(6)
 local function drawLqBar(x, y, w, rqly)
   lcd.drawFilledRectangle(x, y, w, LQ_BAR_H, COLORS.track)
   local rq    = math.min(100, math.max(0, rqly))
-  local rqCol = (rq >= LQ_OK_PCT and COLORS.accent)
-             or (rq >= core.PARAMS.RQLY_THRESHOLD and WARN_COL) or CRIT_COL
+  local lvl   = core.lqLevel(rq)
+  local rqCol = (lvl == 0 and COLORS.accent) or (lvl == 1 and WARN_COL) or CRIT_COL
   lcd.drawFilledRectangle(x, y, math.floor(w * rq / 100), LQ_BAR_H, rqCol)
 end
 
@@ -712,19 +631,18 @@ local function drawMainSmall(W, H, x0, y0, d)
   local gap   = sx(1)
   local nRows = math.floor((H + gap) / (smlH + gap))   -- full-height rows that fit
 
-  -- 1-2 lines: one large stage-coloured % (plus the header when a 2nd line
-  -- fits); pctBig is only needed on these two paths.
+  -- 1 line: one large stage-coloured %; 2 lines: header and the % row with its
+  -- caption.
   if nRows <= 2 then
     local pctBig = (d.range == nil) and "-- %" or (tostring(math.floor(d.range + 0.5)) .. " %")
     if nRows <= 1 then
       local pFlag = fitFont(pctBig, W, H)
       dtext(x0, y0 + math.floor((H - fontH(pFlag)) / 2), pctBig, sc, pFlag)
     else
+      -- header + the % row with its RANGELIMIT / RANGE caption and MODE, like MEDIUM
       drawHeader(x0, y0, headerLabel(d))
       local restTop = y0 + smlH + gap
-      local rest    = (y0 + H) - restTop
-      local pFlag   = fitFont(pctBig, W, rest)
-      dtext(x0, restTop + math.floor((rest - fontH(pFlag)) / 2), pctBig, sc, pFlag)
+      drawPctRow(x0, W, restTop, (y0 + H) - restTop, d, sc)
     end
     return
   end
@@ -789,13 +707,203 @@ local function drawMain(W, H, x0, y0, d)
 end
 
 -- ---------------------------------------------------------------------------
+-- Preflight and end pages (flight phases PRE and ENDED): the content of Flight
+-- Wingman's link column, title, rows and margins as on the main tile.
+-- ---------------------------------------------------------------------------
+
+-- Rows evenly spread below the header like MEDIUM (header = row 0, n rows, the
+-- last at the bottom pad); the pitch never drops below a compressed line.
+local function rowSpread(H, y0, n)
+  local smlH    = fontH(SMLSIZE)
+  local span    = H - smlH
+  local minSpan = n * (smlH - sx(4))
+  if span < minSpan then span = minSpan end
+  return function(i) return y0 + math.floor(i * span / n + 0.5) end
+end
+
+-- Seconds left on a page timer that started at `since` (the core's ms clock,
+-- getTime() * 10) and runs `total` ms.
+local function secsLeft(since, total)
+  return math.max(0, math.ceil((total - (getTime() * 10 - since)) / 1000))
+end
+
+-- Countdown at the bottom right: text left of a bar that runs empty. The text
+-- shrinks to the seconds when the row is too narrow.
+local function drawCountdown(x0, W, y, secs, total, label)
+  local smlH = fontH(SMLSIZE)
+  local barH = math.max(3, sx(6))
+  local barW = math.max(sx(30), math.floor(W * 0.35))
+  local bx   = x0 + W - barW
+  local by   = y + math.floor((smlH - barH) / 2)
+  lcd.drawFilledRectangle(bx, by, barW, barH, COLORS.track)
+  local fw = math.floor(barW * math.max(0, math.min(1, secs / total)))
+  if fw > 0 then lcd.drawFilledRectangle(bx, by, fw, barH, COLORS.muted) end
+  local txt = string.format("%s in %d s", label, secs)
+  if textW(txt, SMLSIZE) > bx - sx(6) - x0 then txt = string.format("%d s", secs) end
+  dtext(bx - sx(6) - textW(txt, SMLSIZE), y, txt, COLORS.muted, SMLSIZE)
+end
+
+-- Status line: dot plus text in the level colour (LINK OK / WARNING / CRITICAL).
+local function drawStatusLine(x, y, st)
+  local smlH = fontH(SMLSIZE)
+  local r    = math.max(2, sx(4))
+  local col  = stageColor(st.level)
+  lcd.drawFilledCircle(x + r, y + math.floor(smlH / 2), r, col)
+  dtext(x + 2 * r + sx(4), y, st.text, col, SMLSIZE)
+  return 2 * r + sx(4) + textW(st.text, SMLSIZE)
+end
+
+-- Muted label left, value right-aligned at the row's end.
+-- label: text, or { long, short } (the short one when the long one does not fit
+-- beside the value); a label that does not fit at all is left out, the value stays.
+local function drawLR(x0, W, y, label, value, col)
+  local vx   = x0 + W - textW(value, SMLSIZE)
+  local room = vx - sx(6) - x0
+  if type(label) == "table" then
+    label = textW(label[1], SMLSIZE) <= room and label[1] or label[2]
+  end
+  if textW(label, SMLSIZE) <= room then dtext(x0, y, label, COLORS.muted, SMLSIZE) end
+  dtext(vx, y, value, col or COLORS.fg, SMLSIZE)
+end
+
+-- Preflight page, laid out like Lipo Nanny's: LQ big (same font box as its
+-- per-cell voltage) with the LQ caption beside it and MODE right, then RSSI and TX
+-- power, the link status and the countdown to the flight page while the check
+-- is met. Status and countdown rows are fixed, the countdown row stays empty
+-- while it does not run, so nothing moves. Smaller zones keep LQ, RSSI/TX,
+-- status and countdown as far as they fit (two rows: LQ and status), the
+-- shortest only the LQ.
+local function drawPre(W, H, x0, y0, d, state)
+  local smlH  = fontH(SMLSIZE)
+  local rq    = math.min(100, math.max(0, d.rqly or 0))
+  local lqCol = stageColor(core.lqLevel(rq))
+  local lqTxt = tostring(rq) .. " %"
+  local st    = core.preflight(d.stage, d.sensLimit)
+  local secs  = state.readySince and secsLeft(state.readySince, core.PRE_HOLD_T)
+  -- rows below the header at the compressed pitch, as on Lipo Nanny's preflight page
+  local nRows = math.floor((H - smlH) / (smlH - sx(4)))
+  if nRows < 1 then
+    local f = fitFont(lqTxt, W, H)
+    dtext(x0, y0 + math.floor((H - fontH(f)) / 2), lqTxt, lqCol, f)
+    return
+  end
+  drawHeader(x0, y0, headerLabel(d))
+  local bottomY = y0 + H - smlH
+  local half    = math.floor(W / 2)
+  local function countdown(y)
+    if secs then drawCountdown(x0, W, y, secs, core.PRE_HOLD_T / 1000, "Flight page") end
+  end
+  local function infoRow(y)
+    drawKV(x0, y, "RSSI ", d.linkRssi and (d.linkRssi .. " dBm") or "--")
+    local tx  = d.tpwr and (d.tpwr .. " mW") or "--"
+    local lbl = textW("TX POWER " .. tx, SMLSIZE) <= W - half and "TX POWER " or "TX PWR "   -- short label on narrow zones
+    drawKV(x0 + half, y, lbl, tx)
+  end
+
+  if not mainFitsFull(W, H) then
+    local k    = (mainFitsMedium(W, H) and nRows >= 4) and 4 or math.min(3, nRows)
+    local rowY = rowSpread(H, y0, k)
+    local top  = rowY(1)
+    local numF = fitFont("100 %", W * 0.5, (k >= 2 and rowY(2) or y0 + H) - sx(2) - top, MIDSIZE)
+    dtext(x0, top, lqTxt, lqCol, numF)
+    local pctBottom = top + fontH(numF)
+    local modeX = (x0 + W) - (textW("MODE ", SMLSIZE) + textW(d.rfmode, SMLSIZE))
+    drawKV(modeX, pctBottom - smlH, "MODE ", d.rfmode)
+    local lqX = x0 + textW(lqTxt, numF) + sx(6)
+    if lqX + textW("LQ", SMLSIZE) <= modeX - sx(4) then dtext(lqX, pctBottom - smlH, "LQ", COLORS.muted, SMLSIZE) end
+    if k == 4 then
+      infoRow(rowY(2))
+      drawStatusLine(x0, rowY(3), st)
+      countdown(rowY(4))
+    else
+      -- no row of its own: the countdown joins the status line, the info row keeps its place
+      if k >= 3 then infoRow(rowY(2)) end
+      if k >= 2 then
+        local cx = x0 + drawStatusLine(x0, rowY(k), st) + sx(8)
+        if secs then drawCountdown(cx, x0 + W - cx, rowY(k), secs, core.PRE_HOLD_T / 1000, "Flight page") end
+      end
+    end
+    return
+  end
+
+  -- FULL: the spare height is shared out evenly between the blocks, as on
+  -- Lipo Nanny's preflight page.
+  local top   = y0 + smlH + sx(1)
+  local bigF  = fitFont("0.00V", math.floor(W * 0.5), math.floor((bottomY - top) * 0.4))
+  local unitF = SMALLER[bigF]
+  local bigH  = fontH(bigF)
+  local num   = tostring(rq)
+  dtext(x0, top, num, lqCol, bigF)
+  local capX  = x0 + textW(num, bigF) + sx(3)
+  dtext(capX, top + bigH - fontH(unitF), "%", lqCol, unitF)
+  capX = capX + textW("%", unitF) + sx(6)
+  -- MODE above the value only when it clears the heartbeat dot, else beside it
+  local mcapY   = top + bigH - fontH(0) - smlH
+  local stacked = mcapY >= sx(12)
+  -- above the value a "Full" mode moves into the caption: "MODE (Full)" over "X100Hz"
+  local mCap, mVal = "MODE", d.rfmode
+  local base = stacked and string.match(d.rfmode, "^(.-) Full$")
+  if base then mCap, mVal = "MODE (Full)", base end
+  local modeX = x0 + W - (stacked and math.max(textW(mVal, 0), textW(mCap, SMLSIZE))
+                                   or (textW(mCap, SMLSIZE) + sx(4) + textW(mVal, 0)))
+  if capX + textW("LQ", SMLSIZE) <= modeX - sx(4) then
+    dtext(capX, top + bigH - smlH, "LQ", COLORS.muted, SMLSIZE)
+  end
+  dtext(x0 + W - textW(mVal, 0), top + bigH - fontH(0), mVal, COLORS.fg, 0)
+  if stacked then
+    dtext(x0 + W - textW(mCap, SMLSIZE), mcapY, mCap, COLORS.muted, SMLSIZE)
+  else
+    dtext(modeX, top + bigH - smlH, mCap, COLORS.muted, SMLSIZE)
+  end
+  local fixed = bigH + 2 * smlH
+  local gap   = math.max(0, math.floor((bottomY - top - fixed) / 3))
+  local infoY = top + bigH + gap
+  infoRow(infoY)
+  drawStatusLine(x0, infoY + smlH + gap, st)
+  countdown(bottomY)
+end
+
+-- End page: the flight's lowest LQ, highest RANGELIMIT (coloured by the
+-- highest warning stage), highest TX power and the last mode, and the
+-- countdown to the wait page. Rows are dropped from the end on short zones.
+local function drawEnded(W, H, x0, y0, d, r, state, mode)
+  local smlH  = fontH(SMLSIZE)
+  local left  = secsLeft(state.endedAt, core.ENDED_HOLD_T)
+  local function pct(v) return v and (string.format("%d", math.floor(v + 0.5)) .. " %") or "--" end
+  local rows = {
+    { { "LOW LINK QUALITY", "LOW LQ" }, pct(r.minRqly), r.minRqly and stageColor(core.lqLevel(r.minRqly)) },
+    { "MAX RANGELIMIT", pct(r.maxRangePct), r.maxRangePct and stageColor(r.maxStage or 0) },
+    { { "MAX TX POWER", "MAX TX PWR" }, r.maxTpwr and (r.maxTpwr .. " mW") or "--" },
+    { "RF MODE", mode or "--" },
+  }
+  local nRows = math.floor((H - smlH) / (smlH - sx(4)))   -- compressed lines below the header
+  if nRows < 2 then
+    drawLR(x0, W, y0, rows[1][1], rows[1][2], rows[1][3])
+    if H >= 2 * smlH then drawCountdown(x0, W, y0 + H - smlH, left, core.ENDED_HOLD_T / 1000, "Wait page") end
+    return
+  end
+  drawHeader(x0, y0, headerLabel(d))
+  local k    = math.min(#rows, nRows - 1)
+  local rowY = rowSpread(H, y0, k + 1)
+  for i = 1, k do drawLR(x0, W, rowY(i), rows[i][1], rows[i][2], rows[i][3]) end
+  drawCountdown(x0, W, rowY(k + 1), left, core.ENDED_HOLD_T / 1000, "Wait page")
+end
+
+-- ---------------------------------------------------------------------------
 -- Widget lifecycle
 -- ---------------------------------------------------------------------------
+-- Setup error shown as the configuration error tile: damaged settings file or a
+-- missing mandatory sensor (details in the settings tool).
+local function setupError(r)
+  local snap = r.snapshot
+  return core.configDamaged or (snap and (not snap.has1RSS or not snap.hasRQly or not snap.hasRFMD)) or false
+end
+
 local function create(zone, opts)
   local ctx = {
     zone = zone, options = opts,
     lastTick = 0, errorStreak = 0, fatalError = false,
-    rangeSmoothed = nil, result = nil, lastRunning = nil, disarmSeen = nil, armedAt = nil,
+    rangeSmoothed = nil, result = nil, lastRunning = nil,
   }
   if core then ctx.state = core.newState() end
   return ctx
@@ -813,17 +921,12 @@ local function tick(ctx)
   local now = getTime()
   if ctx.lastTick ~= 0 and (now - ctx.lastTick) < TICK_INTERVAL then return end
   ctx.lastTick = now
-  pcall(pollDeviceInfo, ctx)   -- cosmetic header; isolated so CRSF never breaks the tick
+  pcall(pollFrames, ctx)   -- cosmetic header; isolated so CRSF never breaks the tick
   local ok, res = pcall(core.update, ctx.state)
   if ok then
     ctx.result      = res
     if res.status == "running" then
       ctx.lastRunning = res                                      -- held during a brief dropout
-      if fmDisarmed(res.snapshot.fm) then ctx.disarmSeen = true end
-      if not fmArmed(ctx, res.snapshot.fm) then ctx.armedAt = nil
-      elseif not ctx.armedAt then ctx.armedAt = now end          -- arm edge: starts the blink
-    elseif res.linkLost then
-      ctx.disarmSeen = nil                                       -- new link, new proof needed
     end
     ctx.errorStreak = 0
   else
@@ -862,7 +965,7 @@ local function refresh(ctx, event, touchState)
     local W, H   = z.w - 2 * pad, z.h - 2 * pad
 
     if not core then
-      drawErrorTile(z, "Core missing", "Reinstall SNTNL")
+      drawErrorTile(z, "Core missing", "Reinstall Link Sentinel")
       return
     end
     if ctx.fatalError then
@@ -875,12 +978,19 @@ local function refresh(ctx, event, touchState)
       drawCenteredLines(z, { "Starting..." })
       return
     end
-    -- Sensor error takes precedence over the volatile link state: existence comes from
-    -- getFieldInfo and does NOT flicker on a missed frame, so "Sensor missing" must win
-    -- over a momentary getRSSI()==0 instead of letting NO LINK flash over it.
-    local snap = r.snapshot
-    if snap and (not snap.has1RSS or not snap.hasRQly or not snap.hasRFMD) then
-      drawErrorTile(z, "Sensor missing", "Discover in EdgeTX")
+    -- Setup error takes precedence over the volatile link state: sensor existence
+    -- comes from getFieldInfo and does NOT flicker on a missed frame, so it must win
+    -- over a momentary getRSSI()==0 instead of letting NO LINK flash over it. The
+    -- details are listed in the settings tool.
+    if setupError(r) then
+      drawErrorTile(z, "Configuration error", "Please check Tool Flight Bag")
+      return
+    end
+
+    -- After a flight: the end page until the hold runs out (then NO LINK).
+    if r.phase == "ENDED" then
+      drawEnded(W, H, x0, y0, { modLine = ctx.state.modLine }, r, ctx.state,
+                ctx.lastRunning and ctx.lastRunning.modeName)
       return
     end
 
@@ -891,14 +1001,19 @@ local function refresh(ctx, event, touchState)
         r = ctx.lastRunning
       else
         ctx.rangeSmoothed = nil   -- reset smoothing so the next connect snaps fresh
-        drawNoLink(ctx, x0, y0, W, H)
+        drawNoLink(ctx)
         return
       end
     end
 
     -- running (live or held): derive display values, smooth the range bar, draw.
     local d      = buildDisplay(ctx, r)
-    local target = rangeTarget(d.linkRssi, d.sensLimit)
+    if r.phase == "PRE" then
+      drawPre(W, H, x0, y0, d, ctx.state)
+      return
+    end
+    -- RANGELIMIT from the core; nil for an unknown mode -> bar full + "--".
+    local target = core.rangePct(d.linkRssi, d.sensLimit)
     smoothRange(ctx, target)
     d.range = (target == nil) and nil or ctx.rangeSmoothed
     drawMain(W, H, x0, y0, d)
@@ -909,7 +1024,8 @@ local function refresh(ctx, event, touchState)
 
   -- Heartbeat: blink only on the live data tile, never on an error/status tile or during
   -- a held dropout or NO LINK.
-  if ok and core and not ctx.fatalError and ctx.result and ctx.result.status == "running" then
+  if ok and core and not ctx.fatalError and ctx.result and ctx.result.status == "running"
+     and not setupError(ctx.result) then
     pcall(drawHeartbeat, ctx)
   end
 end

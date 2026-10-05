@@ -47,7 +47,7 @@ A small EdgeTX project that watches your ExpressLRS link in the background and a
 With ELRS, the usable range depends heavily on the selected RF mode (packet rate). Each mode has its own receiver sensitivity limit. If you don't keep a constant eye on a live telemetry screen, you usually only notice a weakening link when it's already too late.
 
 <p align="center">
-  <img src="docs/img/widget-link.png" width="300" alt="elrs-link-sentinel widget showing the live link display">
+  <img src="docs/img/widget-flight.png" width="300" alt="elrs-link-sentinel widget showing the live link display">
 </p>
 
 The sentinel reads the receiver's telemetry values (RSSI of both antennas, link quality, current RF mode) and plays two graded warning tones:
@@ -55,9 +55,24 @@ The sentinel reads the receiver's telemetry values (RSSI of both antennas, link 
 - **Link Warning:** The antenna(s) are near the current mode's sensitivity limit. *"Time to turn back toward the pilot."*
 - **Link Critical:** Same condition, plus packets starting to drop (RQly < 42 %). *"Come back now."*
 
-If telemetry is lost completely, the sentinel intentionally stays silent, because EdgeTX itself already raises an alarm in that case.
+If telemetry is lost completely, the sentinel stays silent by default, because EdgeTX itself already raises an alarm in that case. An optional **Link lost** announcement can be switched on in the settings.
 
 If telemetry is up but the required sensors (`RFMD`, `1RSS`, `RQly`) never show up, it plays a separate **configuration-error tone** so you know it cannot warn you. The tone repeats every 30 seconds until the sensors appear.
+
+Besides the flight view above, the widget shows a page for each other phase of a flight:
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/img/widget-waiting.png" width="260" alt="Waiting page: no receiver connected"></td>
+    <td align="center"><img src="docs/img/widget-preflight.png" width="260" alt="Preflight page with LQ, RF mode, RSSI, TX power and link status"></td>
+    <td align="center"><img src="docs/img/widget-end.png" width="260" alt="End page with the flight's lowest LQ, highest RANGELIMIT, highest TX power and RF mode"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Waiting</b><br>no receiver connected</td>
+    <td align="center"><b>Preflight</b><br>link check before take-off</td>
+    <td align="center"><b>End</b><br>the flight's link extremes</td>
+  </tr>
+</table>
 
 ---
 
@@ -82,7 +97,7 @@ The warning logic lives in a shared core module (`core.lua`). On top of it sit t
     <tr>
       <td>Visual link display</td>
       <td>❌</td>
-      <td>✅ (range %, RF mode, RSSI, LQ, TX power, FC flight mode, armed status, active antenna, ELRS module + firmware)</td>
+      <td>✅ (range %, RF mode, RSSI, LQ, TX power, FC flight mode, active antenna, ELRS module + firmware)</td>
     </tr>
     <tr>
       <td>Runs in the background</td>
@@ -110,7 +125,7 @@ Both variants need `core.lua` on the SD card, because it holds the shared warnin
 - The following ELRS telemetry sensors must be discovered on the radio (they appear automatically after a telemetry discovery):
   - **Mandatory:** `RFMD`, `1RSS`, `RQly`
   - **Dual-antenna receivers:** `2RSS`
-  - **Widget display only (optional):** `ANT`, `TPWR`, `FM` (shown when present)
+  - **Widget display only (optional):** `ANT`, `TPWR`, `FM` (shown when present). `FM` also tells the widget when the model is armed (switches to the flight view at once, flight values only while armed).
 
 ---
 
@@ -123,21 +138,20 @@ Take the SD card out of the radio (or connect the radio via USB as mass storage)
 ```
 SCRIPTS/
 ├── SNTNL/
-│   └── core.lua            ← shared logic (used by both variants)
+│   ├── core.lua            ← shared logic
+│   └── manifest.lua        ← Flight Bag settings
 ├── FUNCTIONS/
-│   └── sntnl.lua           ← function-script variant
+│   └── sntnl.lua           ← function script
+├── FLIGHTBAG/              ← Flight Bag pages
 └── TOOLS/
-    └── SNTNL.lua           ← on-radio settings tool (optional)
+    └── FLIGHTBAG.lua       ← Tools menu entry
 WIDGETS/
 └── SNTNL/
-    └── main.lua            ← widget variant
+    └── main.lua            ← widget
 SOUNDS/
 └── en/
     └── SCRIPTS/
-        └── SNTNL/
-            ├── stage1.wav
-            ├── stage2.wav
-            └── cfgerr.wav
+        └── SNTNL/          ← all .wav files
 ```
 
 All files are available in the matching folders of this repository, so just copy them to the same locations on the SD card. The WAV files always live under `/SOUNDS/en/SCRIPTS/SNTNL/` regardless of the radio's language setting; the script uses an absolute path to play them.
@@ -176,36 +190,39 @@ All files are available in the matching folders of this repository, so just copy
 - When you intentionally weaken the link (e.g. move the model away, cover an antenna), the first warning tone should play after about 2 seconds and repeat every 5 seconds.
 - With a very weak link **and** packet loss the sentinel automatically switches to the critical warning tone.
 - If you enabled haptic feedback, the radio vibrates together with each warning tone.
+- Each warning switches a dimmed display back on (restarts the backlight timeout).
 - On the widget, the range bar fills towards 100 % and changes color (green → yellow → red) in lockstep with the audio warning.
+- Before the flight the widget shows a preflight page (LQ, mode, link status, RSSI, TX power). Once the link is OK, a bar at the bottom right counts down 15 s to the flight view; arming switches at once. After the flight (1.5 s without link) an end page shows the flight's lowest LQ, highest RANGELIMIT, highest TX power and the mode for 30 s.
 
 ---
 
 ## ⚙️ Customizing
 
-To adjust the warning thresholds and pick custom sounds, use the bundled **settings tool**. Copy `/SCRIPTS/TOOLS/SNTNL.lua` to the SD card (see the file tree above) and open it on the radio via **SYS → Tools → "Link Sentinel"**.
+Thresholds and sounds are set in **Flight Bag**, a settings tool shared by several EdgeTX scripts. Copy its files (see the file tree above) and open **SYS → Tools → Flight Bag**. After **Save**, changes apply within a few seconds for both variants, no restart needed.
 
-- **Settings**: a two-row table (`Stage 1`, `Stage 2`). Scroll onto a row and press ENTER to step through its cells (Threshold → Sound → Test):
-  - **Stage 1 → Threshold**: the warning margin in dB above the mode's sensitivity limit. **Editable 10-30 dB** (default 10). Higher = warns *earlier* / keeps more reserve.
-  - **Stage 2 → Threshold**: the RQly bound (%) for the critical warning. **Editable 30-70 %** (default 42). Higher = critical fires *earlier*.
-  - **Sound**: pick `Off`, `Default`, or any `.wav` you dropped into `/SOUNDS/en/SCRIPTS/SNTNL/`, per stage. Files can have **any name**, and every `.wav` in that folder shows up in the list automatically. `Off` silences **only that stage's tone** — if haptic feedback is on, its pulse still fires (the tone and the buzz are independent).
-  - **Test**: plays the row's currently selected sound so you can compare them on the spot.
-- **Haptic feedback**: vibrate alongside the warning tones (needs a radio with a vibration motor). Off by default; turn it `On` to add a pulse for Stage 1 and a stronger double pulse for Stage 2.
-  - **Haptic strength**: pulse-length tier (`Soft` / `Normal` / `Strong`, default `Normal`). Only shown while haptic feedback is on.
-- **Show armed status**: show `ARMED` in the widget's range bar while the flight controller is armed. On by default.
-- **Reset config** restores the defaults.
-- **About**: version and the paths the project uses.
+Link Sentinel's rows sit under the heading **Link Sentinel**:
 
-Press **Save** to write the settings. They land in `/SCRIPTS/SNTNL/config.lua`, which `core.lua` reads once when the script starts, so **both variants** (function script *and* widget) use them after the next model select (or reboot). The config file is **optional**: without it the hard-coded defaults stay in force.
+- **Warnings**
+  - **Stage 1**: how early the first warning comes, as a margin above the RF mode's sensitivity limit. **10-30 dB** (default 10). Higher warns earlier.
+  - **Stage 2**: the link quality (RQly) below which the warning turns critical. **30-70 %** (default 42). Higher warns earlier.
+- **Alerts**
+  - **Sounds**, **Vibration**, **Strength**: shared by all Flight Bag scripts. `Sounds Off` silences every Link Sentinel tone. Vibration (off by default) gives one pulse for Stage 1 and two for Stage 2, independent of the sound.
+  - **Stage 1** / **Stage 2**: the tone per stage: `Off`, `Default` or any `.wav` you put into `/SOUNDS/en/SCRIPTS/SNTNL/`. **Play** previews it.
+  - **Link lost**: `Off` by default. `Default` says "Radio link lost", `telelost.wav` says "Radio link telemetry lost". It plays once when the link is gone for 1.5 s during a flight, not after a disarm. Without `FM` from the flight controller it also plays when you unplug the battery after landing.
+
+Tap the **Link Sentinel** icon for **Reset settings** and the version. A warning sign on the icon means something needs attention (for example missing sensors or no settings file yet); the popup says what to do.
+
+> **Updating from an older version?** Flight Bag removes the old "Link Sentinel" Tools entry on first start. If it still shows up, delete `/SCRIPTS/TOOLS/SNTNL.lua` by hand.
 
 ---
 
 ## 🛠️ Troubleshooting
 
 - **Script doesn't show up when picking it for the Special Function:** Check the file name. It must be exactly `sntnl.lua` (max. 6 characters, otherwise EdgeTX hides function scripts).
-- **Widget shows "Core missing / Reinstall SNTNL", or the function script errors on load:** `core.lua` is not where it should be. Make sure `/SCRIPTS/SNTNL/core.lua` exists on the SD card, since both variants depend on it.
-- **Widget shows "Sensor missing / Discover in EdgeTX" (and the config-error tone plays):** One of the mandatory sensors (`RFMD`, `1RSS`, `RQly`) is missing. Run a telemetry discovery on the radio while the link is up.
+- **Widget shows "Core missing / Reinstall Link Sentinel", or the function script errors on load:** `core.lua` is not where it should be. Make sure `/SCRIPTS/SNTNL/core.lua` exists on the SD card, since both variants depend on it.
+- **Widget shows "Configuration error / Please check Tool Flight Bag" (and the config-error tone plays):** One of the mandatory sensors (`RFMD`, `1RSS`, `RQly`) is missing. Open **Tools → Flight Bag** and tap the Link Sentinel icon (it carries a warning sign): the popup names the missing sensors, e.g. `Missing sensors: RQly` / `Check sensors config`. Run a telemetry discovery on the radio while the link is up.
 - **Widget shows `FM --` while everything else works:** The flight mode comes from the flight controller's telemetry, not from ExpressLRS. Warnings and the link display are not affected. Enable telemetry on the flight controller (INAV: `feature TELEMETRY`), see [`docs/compatibility.md`](docs/compatibility.md#setup).
-- **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/SNTNL/` (the `en/` folder is mandatory even if your radio is set to another language). The quickest check is the settings tool: press **Test** on a stage to play its tone directly, which confirms the file is found and your radio's volume is up.
+- **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/SNTNL/` (the `en/` folder is mandatory even if your radio is set to another language). The quickest check is Flight Bag: on the **Alerts** page dive into **Stage 1** or **Stage 2** and press **Play**, which confirms the file is found and your radio's volume is up.
 - **Permanent warning / range shows "--" despite good reception:** Your ELRS setup is probably using a mode whose sensitivity limit isn't yet listed in `core.lua`. Please [open an issue](../../issues) so it can be added.
 
 ---

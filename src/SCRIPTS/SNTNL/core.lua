@@ -26,6 +26,15 @@
 -- =====================================================================
 
 local M = {}
+-- Single source of the version: the settings tool reads VERSION, API and
+-- CONFIG_PATH as text from the head of this file (keep them near the top).
+M.VERSION = "3.0.0"
+M.API     = { 1, 0 }
+M.CONFIG_PATH = "/SCRIPTS/SNTNL/config.lua"
+-- API is the interface version for scripts that load this core: { breaking, additive }.
+-- Adding an exported function or field bumps the second number; changing or
+-- removing one bumps the first and resets the second. Fixes and internal
+-- changes leave it alone. A loader accepts the same first and at least its second.
 
 -- ---------------------------------------------------------------------------
 -- Tunable parameters, shared by both variants. The widget must read thresholds
@@ -42,57 +51,79 @@ M.PARAMS = {
                                -- it shows NO LINK, so tone and tile never disagree.
   CFG_ERR_GRACE_MS   = 10000,  -- Grace period before the cfg-error sound is first played
   CFG_ERR_REPEAT_MS  = 30000,  -- Cfg-error sound repeat interval in ms
+  AUDIO              = true,   -- Play announcements at all (false = every sound off)
   HAPTIC             = false,  -- Vibrate alongside the warning sound (opt-in)
   HAPTIC_STRENGTH    = 2,      -- Pulse-length tier: 1 = soft, 2 = normal, 3 = strong
-  SHOW_ARMED         = true,   -- Widget: ARMED in the range bar (display only)
 }
 
--- playHaptic pulse length per strength tier. Stage 2 (critical) fires a second
--- pulse to feel clearly stronger than Stage 1.
-M.HAPTIC_DUR = { [1] = 15, [2] = 30, [3] = 50 }
+-- LQ colour level for displays: 0 (green) at/above LQ_OK_PCT, 1 (yellow) down to
+-- RQLY_THRESHOLD, 2 (red) below. Only green->yellow is display-only; the red end
+-- ties to the stage 2 threshold, so it follows the config.
+M.LQ_OK_PCT = 70
+-- Preflight check of the link: the warning stage as status text and level.
+-- A mode without a known sensitivity limit (sensLimit 0) cannot be judged:
+-- MODE UNKNOWN, a warning (never met). sensLimit nil counts as known.
+local LINK_STATUS = { [0] = "LINK OK", [1] = "LINK WARNING", [2] = "LINK CRITICAL" }
+function M.preflight(stage, sensLimit)
+  if sensLimit == 0 then return { text = "MODE UNKNOWN", level = 1 } end
+  stage = stage or 0
+  return { text = LINK_STATUS[stage] or LINK_STATUS[0], level = stage }
+end
 
--- Sound files. Absolute paths bypass EdgeTX's per-language resolution so the
--- same files play regardless of the radio's language setting.
+function M.lqLevel(rqly)
+  if rqly >= M.LQ_OK_PCT then return 0 end
+  return (rqly >= M.PARAMS.RQLY_THRESHOLD) and 1 or 2
+end
+
+-- playHaptic pulse length per strength tier, and pulses per warning: Stage 2
+-- (critical) fires twice to feel clearly stronger than Stage 1.
+M.HAPTIC_DUR    = { [1] = 15, [2] = 30, [3] = 50 }
+M.HAPTIC_PULSES = { stage1 = 1, stage2 = 2 }
+
+-- Warning sounds. The config stores only a file name from SOUND_DIR; the
+-- absolute path bypasses EdgeTX's per-language resolution so the same files
+-- play regardless of the radio's language setting.
+M.SOUND_DIR      = "/SOUNDS/en/SCRIPTS/SNTNL/"
+M.SOUND_KEYS     = { "stage1", "stage2", "lost" }
+M.SOUND_DEFAULTS = { stage1 = "stage1.wav", stage2 = "stage2.wav", lost = "linklost.wav" }
+-- Full paths that play (false = muted), overlaid from the config.
 M.SOUNDS = {
-  stage1 = "/SOUNDS/en/SCRIPTS/SNTNL/stage1.wav",
-  stage2 = "/SOUNDS/en/SCRIPTS/SNTNL/stage2.wav",
-  cfgerr = "/SOUNDS/en/SCRIPTS/SNTNL/cfgerr.wav",
+  stage1 = M.SOUND_DIR .. "stage1.wav",
+  stage2 = M.SOUND_DIR .. "stage2.wav",
+  lost   = false,
+  cfgerr = M.SOUND_DIR .. "cfgerr.wav",
 }
+-- Sounds that are off until picked: a missing config entry means Off, so the
+-- settings tool's "Default" is written out as the file name (see saveConfig).
+local SOUND_DEFAULT_OFF = { lost = true }
 
 -- ---------------------------------------------------------------------------
--- Optional configuration overlay. The Tools-Script (/SCRIPTS/TOOLS/SNTNL.lua)
+-- Optional configuration overlay. The settings tool (/SCRIPTS/TOOLS/FLIGHTBAG.lua)
 -- writes /SCRIPTS/SNTNL/config.lua; both variants pick it up here, so there is
 -- no second place that reads the user's thresholds/sounds. The file is OPTIONAL:
 -- without it (or with a broken one) the hard-coded defaults above stay in force.
 -- ---------------------------------------------------------------------------
--- Exported: the Tools-Script (the config WRITER) reads path and schema version
--- from here, so writer and reader can never drift apart. VERSION lives here too,
--- so the About page always names the core that actually runs.
-M.VERSION               = "2.2.0"
-M.CONFIG_PATH           = "/SCRIPTS/SNTNL/config.lua"
 M.CONFIG_SCHEMA_VERSION = 1
 
--- Editable ranges -- the SINGLE source of truth, also read by the Tools-Script
--- so the on-radio editor and the runtime clamp can never drift apart.
+-- Editable ranges, keyed like the config -- the SINGLE source of truth, also read
+-- by the settings tool so the editor and the runtime clamp can never drift apart.
 M.LIMITS = {
-  WARN_OFFSET_DB  = { min = 10, max = 30 },   -- Stage 1 dB offset over the sens. limit
-  RQLY_THRESHOLD  = { min = 30, max = 70 },   -- Stage 2 RQly % bound
-  HAPTIC_STRENGTH = { min = 1,  max = 3 },    -- Haptic pulse-length tier
+  warnOffsetDb   = { min = 10, max = 30, step = 1 },   -- Stage 1 dB offset over the sens. limit
+  rqlyThreshold  = { min = 30, max = 70, step = 1 },   -- Stage 2 RQly % bound
+  hapticStrength = { min = 1,  max = 3,  step = 1 },   -- Haptic pulse-length tier
 }
 
--- Snapshot of the hard-coded defaults, used as the per-field fallback when a
--- config omits a value (or sets "Default" = nil for a sound). Taken before any
--- override runs, so applyConfigOverrides is idempotent regardless of call order.
--- Exported: the Tools-Script reads the TRUE factory defaults from here -- PARAMS
--- and SOUNDS are already config-overlaid by the time the tool loads core.
+-- Snapshot of the hard-coded defaults, keyed like the config, used as the
+-- per-field fallback when a config omits a value. Taken before any override
+-- runs, so applyConfigOverrides is idempotent regardless of call order. The
+-- settings tool reads the TRUE factory defaults from here (PARAMS and SOUNDS
+-- are already config-overlaid by then).
 M.DEFAULTS = {
   warnOffsetDb   = M.PARAMS.WARN_OFFSET_DB,
   rqlyThreshold  = M.PARAMS.RQLY_THRESHOLD,
+  audio          = M.PARAMS.AUDIO,
   haptic         = M.PARAMS.HAPTIC,
   hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
-  showArmed      = M.PARAMS.SHOW_ARMED,
-  stage1Sound    = M.SOUNDS.stage1,
-  stage2Sound    = M.SOUNDS.stage2,
 }
 local DEFAULTS = M.DEFAULTS
 
@@ -111,81 +142,206 @@ local function boolOr(v, fallback)
 end
 
 -- True unless fstat positively says the file is gone. fstat is absent on the
--- desktop and pcall-guarded, so "unknown" keeps the custom path (no regression).
-local function soundFileExists(path)
+-- desktop and pcall-guarded, so "unknown" keeps the custom name (no regression).
+local function soundFileExists(name)
   if not fstat then return true end
-  local ok, info = pcall(fstat, path)
+  local ok, info = pcall(fstat, M.SOUND_DIR .. name)
   return not ok or info ~= nil
 end
 
--- Sound override helper: a string is a custom path (dropped to the default when
--- the file no longer exists on the card, so the warning still sounds), `false`
--- means the user muted this event (it stays silent), and anything else (nil /
--- garbage) falls back to the bundled default so a corrupt config can never reach
--- playFile with junk.
-local function soundOr(v, fallback)
+-- Sound override helper: a string is a custom file name (an older full path is
+-- cut to its name; dropped to the default when the file no longer exists on the
+-- card, so the warning still sounds), `false` means the user muted this event,
+-- and anything else (nil / garbage) falls back to the default (nil) so a corrupt
+-- config can never reach playFile with junk.
+local function soundOr(v)
   if type(v) == "string" then
-    if soundFileExists(v) then return v end
-    return fallback
+    local name = string.match(v, "[^/]+$")
+    if name and soundFileExists(name) then return name end
+    return nil
   end
   if v == false then return false end
-  return fallback
+  return nil
 end
 
--- Normalise a parsed config table into a clean copy (never touches PARAMS; the
--- only I/O is one fstat per custom sound):
--- thresholds clamped to M.LIMITS, wrong types replaced by the factory default, a
--- sound is a path string, false (muted) or nil (default). The ONE place that
--- decides what a config value means -- the runtime overlay below and the
--- Tools-Script's editor both go through here, so they can never disagree on a
--- hand-edited file.
+-- Normalise a parsed config table into a copy (never touches PARAMS; the only
+-- I/O is one fstat per custom sound): thresholds clamped to M.LIMITS, wrong
+-- types replaced by the factory default, a sound is a file name, false (muted)
+-- or nil (default). Unknown entries are kept as they are, so a setting written
+-- by a newer version survives a save through this one. The ONE place that
+-- decides what a config value means -- the runtime overlay and the settings
+-- tool both go through here, so they can never disagree on a hand-edited file.
 function M.normalizeConfig(cfg)
-  cfg = cfg or {}
-  local L   = M.LIMITS
-  local snd = (type(cfg.sounds) == "table") and cfg.sounds or {}
-  return {
-    warnOffsetDb   = clampNum(cfg.warnOffsetDb,
-                       L.WARN_OFFSET_DB.min, L.WARN_OFFSET_DB.max, DEFAULTS.warnOffsetDb),
-    rqlyThreshold  = clampNum(cfg.rqlyThreshold,
-                       L.RQLY_THRESHOLD.min, L.RQLY_THRESHOLD.max, DEFAULTS.rqlyThreshold),
-    haptic         = boolOr(cfg.haptic, DEFAULTS.haptic),
-    hapticStrength = clampNum(cfg.hapticStrength,
-                       L.HAPTIC_STRENGTH.min, L.HAPTIC_STRENGTH.max, DEFAULTS.hapticStrength),
-    showArmed      = boolOr(cfg.showArmed, DEFAULTS.showArmed),
-    sounds = { stage1 = soundOr(snd.stage1, nil), stage2 = soundOr(snd.stage2, nil) },
-  }
+  local out = {}
+  if type(cfg) == "table" then for k, v in pairs(cfg) do out[k] = v end end
+  local L = M.LIMITS
+  out.warnOffsetDb   = clampNum(out.warnOffsetDb,
+                         L.warnOffsetDb.min, L.warnOffsetDb.max, DEFAULTS.warnOffsetDb)
+  out.rqlyThreshold  = clampNum(out.rqlyThreshold,
+                         L.rqlyThreshold.min, L.rqlyThreshold.max, DEFAULTS.rqlyThreshold)
+  out.audio          = boolOr(out.audio, DEFAULTS.audio)
+  out.haptic         = boolOr(out.haptic, DEFAULTS.haptic)
+  out.hapticStrength = clampNum(out.hapticStrength,
+                         L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength)
+  local snd, sounds = (type(out.sounds) == "table") and out.sounds or {}, {}
+  for k, v in pairs(snd) do sounds[k] = v end
+  for _, k in ipairs(M.SOUND_KEYS) do
+    sounds[k] = soundOr(snd[k])
+    if sounds[k] == nil and SOUND_DEFAULT_OFF[k] then sounds[k] = false end
+  end
+  out.sounds = sounds
+  if type(out.generation) ~= "number" then out.generation = 0 end
+  return out
 end
 
--- Apply a parsed config table over PARAMS/SOUNDS (pure: no file I/O, so it is
--- directly unit-testable). A nil sound means "use the default".
+-- Apply a parsed config table over PARAMS/SOUNDS (pure: no file I/O beyond
+-- normalizeConfig, so it is directly unit-testable). A nil sound means "use the
+-- default".
 function M.applyConfigOverrides(cfg)
   local n = M.normalizeConfig(cfg)
   M.PARAMS.WARN_OFFSET_DB  = n.warnOffsetDb
   M.PARAMS.RQLY_THRESHOLD  = n.rqlyThreshold
+  M.PARAMS.AUDIO           = n.audio
   M.PARAMS.HAPTIC          = n.haptic
   M.PARAMS.HAPTIC_STRENGTH = n.hapticStrength
-  M.PARAMS.SHOW_ARMED      = n.showArmed
-  M.SOUNDS.stage1 = (n.sounds.stage1 == nil) and DEFAULTS.stage1Sound or n.sounds.stage1
-  M.SOUNDS.stage2 = (n.sounds.stage2 == nil) and DEFAULTS.stage2Sound or n.sounds.stage2
+  for _, k in ipairs(M.SOUND_KEYS) do
+    local v = n.sounds[k]
+    if v == nil then v = M.SOUND_DEFAULTS[k] end
+    M.SOUNDS[k] = v and (M.SOUND_DIR .. v)
+  end
 end
 
--- Load the optional config ONCE at module load. The thresholds are ground-config
--- (set in the Tools-Script, not retuned mid-flight), so a one-shot read at
--- init/create is enough -- a change takes effect on the next model select / reboot,
--- with no per-tick file I/O. Fully fault tolerant: a missing or broken file simply
--- leaves the hard-coded defaults in force. loadScript is the documented EdgeTX way
--- to load a Lua file (nil when missing/broken) and does not exist on desktop, so
--- the unit tests are unaffected. Text only, no .luac (mode "tx"): the radio would
--- prefer a compiled copy with the same 2 s FAT timestamp over a newer file.
-local function loadConfigOnce()
-  local chunk = loadScript and loadScript(M.CONFIG_PATH, "tx")
-  if not chunk then return end                             -- no config -> defaults
-  local ok, result = pcall(chunk)
-  if not ok or type(result) ~= "table" then return end     -- parse error -> defaults
-  if result.schemaVersion ~= M.CONFIG_SCHEMA_VERSION then return end
-  M.applyConfigOverrides(result)
+-- ---------------------------------------------------------------------------
+-- Config file: load, save, defaults, reset, reload. Written by the settings
+-- tool; the file is OPTIONAL, without it (or with a broken one) the hard-coded
+-- defaults stay in force.
+-- ---------------------------------------------------------------------------
+
+local function quoteString(s)
+  s = string.gsub(s, "\\", "\\\\")
+  s = string.gsub(s, '"', '\\"')
+  s = string.gsub(s, "\n", "\\n")
+  return '"' .. s .. '"'
 end
-pcall(loadConfigOnce)
+
+-- Lua source for a value; string keys sorted so the file is stable.
+local function serialize(value, indent)
+  local t = type(value)
+  if t == "number" or t == "boolean" then return tostring(value) end
+  if t == "string" then return quoteString(value) end
+  if t ~= "table" then return "nil" end
+  local nextIndent, parts, n = indent .. "  ", {}, #value
+  for i = 1, n do parts[#parts + 1] = nextIndent .. serialize(value[i], nextIndent) end
+  local keys = {}
+  for k in pairs(value) do
+    if not (type(k) == "number" and k >= 1 and k <= n and math.floor(k) == k) then
+      keys[#keys + 1] = k
+    end
+  end
+  table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+  for _, k in ipairs(keys) do
+    local keyStr = (type(k) == "string") and ("[" .. quoteString(k) .. "]") or ("[" .. tostring(k) .. "]")
+    parts[#parts + 1] = nextIndent .. keyStr .. " = " .. serialize(value[k], nextIndent)
+  end
+  if #parts == 0 then return "{}" end
+  return "{\n" .. table.concat(parts, ",\n") .. ",\n" .. indent .. "}"
+end
+
+-- Reads a whole file (block reads; "a" format is not on every build), or nil.
+local function readFile(path)
+  local ok, f = pcall(io.open, path, "r")
+  if not ok or not f then return nil end
+  local parts = {}
+  while true do
+    local rok, chunk = pcall(io.read, f, 4096)
+    if not rok or not chunk or chunk == "" then break end
+    parts[#parts + 1] = chunk
+  end
+  pcall(io.close, f)
+  return table.concat(parts)
+end
+
+-- io.open "w" does NOT truncate on some EdgeTX/SD builds, so a shorter write
+-- would leave the old tail behind -- pad with trailing newlines (valid after the
+-- table) up to the old length. Pcall-wrapped so a full/read-only SD never raises.
+local function writeFile(path, content)
+  local old = readFile(path)
+  if old and #old > #content then
+    content = content .. string.rep("\n", #old - #content)
+  end
+  local ok, f = pcall(io.open, path, "w")
+  if not ok or not f then return false end
+  local wok = pcall(io.write, f, content)
+  pcall(io.close, f)
+  return wok == true
+end
+
+-- Returns the normalised config, or nil plus "missing" | "parse" | "schema"
+-- (and a detail text). Text only, no .luac (mode "tx"): the radio would prefer
+-- a compiled copy with the same 2 s FAT timestamp over a newer file.
+function M.loadConfig()
+  local ok, f = pcall(io.open, M.CONFIG_PATH, "r")
+  if not ok or not f then return nil, "missing" end
+  pcall(io.close, f)
+  local cok, chunk, err = pcall(loadScript, M.CONFIG_PATH, "tx")
+  if not cok or not chunk then return nil, "parse", tostring(err or chunk) end
+  local pok, result = pcall(chunk)
+  if not pok then return nil, "parse", tostring(result) end
+  if type(result) ~= "table" then return nil, "parse", "not a table" end
+  if result.schemaVersion ~= M.CONFIG_SCHEMA_VERSION then
+    return nil, "schema", tostring(result.schemaVersion)
+  end
+  return M.normalizeConfig(result)
+end
+
+-- Writes the config with a raised generation (the reload sentinel). True on success.
+function M.saveConfig(cfg)
+  cfg.schemaVersion = M.CONFIG_SCHEMA_VERSION
+  cfg.generation    = (cfg.generation or 0) + 1
+  if type(cfg.sounds) ~= "table" then cfg.sounds = {} end
+  for k in pairs(SOUND_DEFAULT_OFF) do
+    if cfg.sounds[k] == nil then cfg.sounds[k] = M.SOUND_DEFAULTS[k] end
+  end
+  return writeFile(M.CONFIG_PATH, "-- ELRS Link Sentinel configuration (auto-generated).\nreturn "
+                                  .. serialize(cfg, "") .. "\n")
+end
+
+-- Factory settings as a fresh table.
+function M.defaultConfig()
+  local cfg = M.normalizeConfig({})
+  cfg.schemaVersion = M.CONFIG_SCHEMA_VERSION
+  return cfg
+end
+
+-- Settings back to factory values. The shared settings (audio, haptic) are kept: they
+-- are set once for all scripts in the settings tool. True on success.
+function M.resetSettings()
+  local cfg = M.loadConfig() or M.defaultConfig()
+  local fresh = M.defaultConfig()
+  fresh.audio, fresh.haptic, fresh.hapticStrength = cfg.audio, cfg.haptic, cfg.hapticStrength
+  fresh.generation = cfg.generation
+  return M.saveConfig(fresh)
+end
+
+-- Re-reads the config at most every CONFIG_POLL_MS and applies it when its
+-- generation changed (or it appeared / went away), so a change made in the
+-- settings tool takes effect without a model reload.
+local CONFIG_POLL_MS = 5000
+local configGen, configPollAt
+function M.pollConfig(now)
+  now = now or getTime() * 10
+  if configPollAt and now - configPollAt < CONFIG_POLL_MS then return end
+  configPollAt = now
+  local cfg, kind = M.loadConfig()
+  -- damaged or wrong version: defaults stay in use, but it is a setup error
+  M.configDamaged = (kind == "parse" or kind == "schema")
+  local gen = cfg and cfg.generation or false
+  if gen ~= configGen then
+    configGen = gen
+    M.applyConfigOverrides(cfg or {})
+  end
+end
+pcall(M.pollConfig, 0)
 
 -- ---------------------------------------------------------------------------
 -- Telemetry sensors + sensitivity limits
@@ -195,6 +351,7 @@ pcall(loadConfigOnce)
 M.SENSORS = {
   rssi1 = "1RSS", rssi2 = "2RSS", rqly = "RQly",
   rfmd  = "RFMD", ant  = "ANT",   tpwr = "TPWR", fm = "FM",
+  rsnr  = "RSNR",
 }
 
 -- Sensitivity limits in dBm per RFMD.
@@ -327,13 +484,80 @@ local function linkLost(state, up, now, grace)
   return now - state.linkLostSince >= grace
 end
 
+-- Disarmed marker in the FM text: Betaflight appends * ! ?, ArduPilot *,
+-- INAV sends OK / WAIT / !ERR. "!FS!" (failsafe) is armed despite its "!".
+local INAV_DISARMED = { OK = true, WAIT = true, ["!ERR"] = true }
+local function fmDisarmed(fm)
+  if fm == "!FS!" then return false end
+  if INAV_DISARMED[fm] then return true end
+  local last = string.sub(fm, -1)
+  return last == "*" or last == "!" or last == "?"
+end
+
+-- armed, known. Known only once a disarmed marker was seen on this link
+-- (state.disarmSeen): some setups never send one, and a text without a marker
+-- alone proves nothing. Clear state.disarmSeen when the flight ends.
+local function armedFromFM(state, fm)
+  if type(fm) ~= "string" or fm == "" then return false, false end
+  if fmDisarmed(fm) then
+    state.disarmSeen = true
+    return false, true
+  end
+  if not state.disarmSeen then return false, false end
+  return true, true
+end
+M.armedFromFM = armedFromFM
+
+-- Flight phases, word for word the same in every script. They pick the page:
+-- WAITING (no link) -> PRE (link up) -> FLIGHT (armed, or the app's preflight
+-- check met for PRE_HOLD_T without a break) -> ENDED (link lost LINK_LOSS_T)
+-- -> WAITING after ENDED_HOLD_T. No way back from FLIGHT to PRE (a disarm keeps
+-- FLIGHT). A loss in PRE goes straight to WAITING (no flight). A loss while
+-- armed is a link failure: back within ENDED_HOLD_T, the same flight goes on.
+-- Display only: logic that needs the real armed state reads armedFromFM.
+-- Times in ms. Returns the phase and an event: "new" (a new flight starts in
+-- PRE), "lost" (PRE -> WAITING), "end" (FLIGHT -> ENDED, s.linkFailure tells
+-- why), "resume" (link back after a failure) or "over" (ENDED_HOLD_T without
+-- link), else nil.
+local LINK_LOSS_T, ENDED_HOLD_T, PRE_HOLD_T = 1500, 30000, 15000
+local function flightPhase(s, up, armed, ready, now)
+  local phase, event = s.phase or "WAITING", nil
+  local lost = linkLost(s, up, now, LINK_LOSS_T)
+  if up then s.armedBeforeLoss = armed == true end
+  if phase == "WAITING" then
+    if up then phase, event = "PRE", "new" end
+  elseif phase == "ENDED" then
+    if up and s.linkFailure then
+      phase, event = "FLIGHT", "resume"
+    elseif up then
+      phase, event = "PRE", "new"
+    elseif now - s.endedAt >= ENDED_HOLD_T then
+      phase, event = "WAITING", "over"
+    end
+    if phase ~= "ENDED" then s.linkFailure = nil end
+  elseif phase == "FLIGHT" then
+    if lost then
+      phase, event, s.endedAt, s.linkFailure = "ENDED", "end", now, s.armedBeforeLoss
+    end
+  elseif lost then
+    phase, event = "WAITING", "lost"
+  elseif up then
+    if not ready then s.readySince = nil elseif not s.readySince then s.readySince = now end
+    if armed or (s.readySince and now - s.readySince >= PRE_HOLD_T) then phase = "FLIGHT" end
+  end
+  if phase ~= "PRE" then s.readySince = nil end
+  s.phase = phase
+  return phase, event
+end
+M.flightPhase = flightPhase
+M.LINK_LOSS_T, M.ENDED_HOLD_T, M.PRE_HOLD_T = LINK_LOSS_T, ENDED_HOLD_T, PRE_HOLD_T
+
 -- ---------------------------------------------------------------------------
 -- State (caller-owned)
 -- ---------------------------------------------------------------------------
 function M.newState()
   return {
-    currentRFMD   = nil,
-    warnThreshold = nil,
+    phase  = "WAITING",   -- flight phase (flightPhase); its link fields live here too
     stage1 = { condSince = 0, active = false },
     stage2 = { condSince = 0, active = false },
     -- announcedStage/lastPlay drive the sound: any CHANGE of the sounding stage
@@ -360,8 +584,6 @@ end
 -- survives dropouts, so the cfgerr grace must not restart on every loss --
 -- evaluate() clears those timers once the sensors are present again.
 local function resetAll(state)
-  state.currentRFMD    = nil
-  state.warnThreshold  = nil
   state.announcedStage = 0
   state.lastPlay       = 0
   resetStage(state.stage1)
@@ -395,6 +617,36 @@ function M.debounce(s, cond, now)
   end
 end
 
+-- RANGELIMIT in % (0..100): how far the governing RSS has come towards the
+-- mode's raw sensitivity limit (100 = limit reached). nil for a placeholder or
+-- unknown mode (sensLimit 0).
+function M.rangePct(rss, sensLimit)
+  if not sensLimit or sensLimit == 0 then return nil end
+  local pct = 100 * (rss + 50) / (sensLimit + 50)
+  if pct < 0 then return 0 elseif pct > 100 then return 100 end
+  return pct
+end
+
+-- Setup errors that need no telemetry, one text each (the settings tool lists
+-- them; a widget only shows that there is one): mandatory sensors not
+-- discovered in the model. state as kept by update; without it a fresh one.
+local MANDATORY = { "rssi1", "rqly", "rfmd" }
+function M.setupErrors(state)
+  state = state or M.newState()
+  local has = sensorsPresent(state, M.SENSORS, nowMs(), SENSOR_CHECK_MS)
+  local out = {}
+  if M.configDamaged then out[1] = "Settings file damaged" end   -- defaults in use
+  local missing = {}
+  for _, k in ipairs(MANDATORY) do
+    if not has[k] then missing[#missing + 1] = M.SENSORS[k] end
+  end
+  if #missing > 0 then
+    out[#out + 1] = "Missing sensors: " .. table.concat(missing, ", ")
+    out[#out + 1] = "Check sensors config"
+  end
+  return out
+end
+
 -- ---------------------------------------------------------------------------
 -- Telemetry reading -- the single place that reads ALL sensors raw.
 -- ---------------------------------------------------------------------------
@@ -413,6 +665,7 @@ function M.readSnapshot(state, now)
     ant       = readPresent(has, S, "ant"),  -- display-only -> nil when absent
     tpwr      = readPresent(has, S, "tpwr"),
     fm        = readPresent(has, S, "fm"),   -- string sensor
+    rsnr      = readPresent(has, S, "rsnr"), -- uplink SNR in dB, for scripts that load the core
   }
 end
 
@@ -423,6 +676,22 @@ end
 function M.evaluate(state, snap, now)
   local result = {}
 
+  -- Flight phase from the link, the armed state and the last cycle's preflight
+  -- check. A flight end clears the extremes on the next sample: disarmed or
+  -- unknown before the loss, a loss before the flight page, or 30 s without
+  -- link (also after a link failure while armed).
+  local armed, armedKnown = false, false
+  if snap.rssiValid then armed, armedKnown = armedFromFM(state, snap.fm) end
+  local phase, event = flightPhase(state, snap.rssiValid, armed, state.preReady, now)
+  if event == "lost" or event == "over" or (event == "end" and not state.linkFailure) then
+    state.disarmSeen = nil   -- new flight, new proof needed
+    state.minsStale  = true  -- flight extremes stay readable until the next link
+  end
+  result.phase = phase
+  -- Link lost tone: once per flight end, when armed or unknown before the loss.
+  if snap.rssiValid then state.lostTone = armed or not armedKnown end
+  if event == "end" and state.lostTone then result.playLost = true end
+
   -- Telemetry lost -> stay silent (ELRS alarms on a real loss itself). Do NOT reset
   -- immediately: a brief gap must not wipe an active warning, or both stages re-debounce
   -- in parallel on reconnect and flash a spurious OK between WARNING and CRITICAL. Reset
@@ -432,13 +701,17 @@ function M.evaluate(state, snap, now)
     if lost then resetAll(state) end
     result.status   = "no_link"
     result.linkLost = lost      -- grace elapsed -> widget shows NO LINK
+    result.minRqly, result.minMarginDb = state.minRqly, state.minMarginDb
+    result.maxRangePct, result.maxTpwr = state.maxRangePct, state.maxTpwr
+    result.maxStage = state.maxStage
     return result
   end
 
   -- 1RSS, RQly and RFMD are mandatory. After a grace period (to tolerate
   -- sensor-discovery delays) flag cfgerr -- the script cannot warn without them.
   if not snap.has1RSS or not snap.hasRQly or not snap.hasRFMD then
-    result.status = "cfg_error"
+    result.status  = "cfg_error"
+    state.preReady = false
     if state.cfgErrSince == 0 then
       state.cfgErrSince = now
     elseif (now - state.cfgErrSince) >= M.PARAMS.CFG_ERR_GRACE_MS then
@@ -454,12 +727,9 @@ function M.evaluate(state, snap, now)
   state.cfgErrSince    = 0
   state.cfgErrLastPlay = 0
 
-  -- Mode -> threshold; recompute only on an actual mode change.
+  -- Recomputed every cycle so a changed offset applies mid-flight.
   local rfmd = snap.rfmd
-  if rfmd ~= state.currentRFMD then
-    state.currentRFMD   = rfmd
-    state.warnThreshold = M.thresholdFor(rfmd)
-  end
+  local warnThreshold = M.thresholdFor(rfmd)
   local sensLimit = M.SENS_LIMIT[rfmd] or 0
 
   -- Governing RSS: the stronger antenna, or 1RSS when there is no second one
@@ -467,7 +737,7 @@ function M.evaluate(state, snap, now)
   local rss1, rss2, rqly = snap.rss1, snap.rss2, snap.rqly
   local dual       = (rss2 ~= nil and rss2 ~= 0)
   local linkRssi   = dual and math.max(rss1, rss2) or rss1
-  local stage1Cond = (linkRssi <= state.warnThreshold)
+  local stage1Cond = (linkRssi <= warnThreshold)
   local stage2Cond = stage1Cond and (rqly < M.PARAMS.RQLY_THRESHOLD)
 
   M.debounce(state.stage1, stage1Cond, now)
@@ -487,23 +757,100 @@ function M.evaluate(state, snap, now)
     state.lastPlay = now
   end
 
+  -- Flight extremes (the widget's end page, scripts that load the core):
+  -- lowest RQly, smallest margin of the governing RSS above the mode's
+  -- sensitivity limit (dB, comparable across mode changes), highest RANGELIMIT,
+  -- highest TX power (mW, nil without TPWR) and highest warning stage. With FM only while armed;
+  -- cleared on the first sample after a flight end (see flightPhase above).
+  if state.minsStale then
+    state.minRqly, state.minMarginDb, state.minsStale = nil, nil, nil
+    state.maxRangePct, state.maxTpwr, state.maxStage = nil, nil, nil
+  end
+  local rangePct = M.rangePct(linkRssi, sensLimit)
+  if armed or not armedKnown then
+    if not state.minRqly or rqly < state.minRqly then state.minRqly = rqly end
+    if sensLimit ~= 0 then
+      local margin = linkRssi - sensLimit
+      if not state.minMarginDb or margin < state.minMarginDb then state.minMarginDb = margin end
+    end
+    if rangePct and (not state.maxRangePct or rangePct > state.maxRangePct) then state.maxRangePct = rangePct end
+    if snap.tpwr and (not state.maxTpwr or snap.tpwr > state.maxTpwr) then state.maxTpwr = snap.tpwr end
+    if sounding > (state.maxStage or 0) then state.maxStage = sounding end
+  end
+
+  state.preReady   = M.preflight(sounding, sensLimit).level == 0   -- preflight check for flightPhase
   result.status    = "running"
   result.stage     = sounding
   result.sensLimit = sensLimit              -- raw (no offset) -> widget's rangePct
   result.linkRssi  = linkRssi               -- governing RSS (stronger antenna) -> range bar
   result.modeName  = M.MODE_NAMES[rfmd]     -- nil if unknown (widget falls back to number)
+  result.armed     = armed                  -- false while unknown
+  result.rangePct    = rangePct               -- RANGELIMIT now (nil for an unknown mode)
+  result.minRqly     = state.minRqly
+  result.minMarginDb = state.minMarginDb
+  result.maxRangePct = state.maxRangePct
+  result.maxTpwr     = state.maxTpwr
+  result.maxStage    = state.maxStage            -- highest warning stage of the flight (nil: none)
   return result
 end
 
--- Vibrate alongside a warning. `pulses` = 1 for Stage 1, 2 for the stronger
--- Stage 2. No-op when haptic is off or the build lacks playHaptic (desktop
--- tests), so it never touches the pure logic above.
-local function warnHaptic(pulses)
+-- Vibrate alongside a warning, HAPTIC_PULSES[key] pulses. No-op when haptic
+-- is off or the build lacks playHaptic (desktop tests), so it never touches the
+-- pure logic above.
+local function warnHaptic(key)
   if not M.PARAMS.HAPTIC or not playHaptic then return end
-  local dur = M.HAPTIC_DUR[M.PARAMS.HAPTIC_STRENGTH] or M.HAPTIC_DUR[2]
+  local dur    = M.HAPTIC_DUR[M.PARAMS.HAPTIC_STRENGTH] or M.HAPTIC_DUR[2]
+  local pulses = M.HAPTIC_PULSES[key] or 1
   for i = 1, pulses do
     playHaptic(dur, (i < pulses) and dur or 0)   -- gap between pulses, none after the last
   end
+end
+
+-- ---------------------------------------------------------------------------
+-- CRSF device info: TX module name + firmware for a display (state.modLine, nil
+-- until known). The caller pops the CRSF queue once per cycle and hands every
+-- frame to handleFrame, so other consumers in the same script get them too;
+-- pollModule pings until the module has answered. Not part of update(): a
+-- script without a display has no use for it.
+-- ---------------------------------------------------------------------------
+local CRSF_PING, CRSF_DEVICE_INFO = 0x28, 0x29
+local ADDR_BROADCAST, ADDR_RADIO  = 0x00, 0xEA
+local ADDR_TX_MODULE              = 0xEE   -- the only sender accepted (not FC or receiver)
+local DEV_PING_MS                 = 1000
+
+-- Null-terminated string from byte array `b` at `from`; returns it and the index after the 0.
+local function crsfReadString(b, from)
+  local out, i = {}, from
+  while b[i] and b[i] ~= 0 do
+    out[#out + 1] = string.char(b[i])
+    i = i + 1
+  end
+  return table.concat(out), i + 1
+end
+
+function M.handleFrame(state, cmd, data)
+  if cmd ~= CRSF_DEVICE_INFO or type(data) ~= "table" or data[2] ~= ADDR_TX_MODULE then return end
+  local name, p = crsfReadString(data, 3)
+  -- after the name: serial(4) + hardware(4) + software(4), version in the last three bytes
+  local maj, min, rev = data[p + 9], data[p + 10], data[p + 11]
+  if name ~= "" and maj and min and rev then
+    state.modLine = string.format("%s (v%d.%d.%d)", name, maj, min, rev)
+  end
+end
+
+-- Once known, no more pings: EdgeTX keeps polling itself, so a module swap still shows.
+function M.pollModule(state, now)
+  if state.modLine or not crossfireTelemetryPush then return end
+  now = now or nowMs()
+  if state.lastDevPing == nil or now - state.lastDevPing >= DEV_PING_MS then
+    crossfireTelemetryPush(CRSF_PING, { ADDR_BROADCAST, ADDR_RADIO })
+    state.lastDevPing = now
+  end
+end
+
+-- Restarts the backlight timeout so a dark display lights up with a warning.
+local function wakeDisplay()
+  if lcd and lcd.resetBacklightTimeout then lcd.resetBacklightTimeout() end
 end
 
 -- ---------------------------------------------------------------------------
@@ -513,21 +860,28 @@ end
 -- ---------------------------------------------------------------------------
 function M.update(state, now)
   now = now or nowMs()
+  M.pollConfig(now)
   local snap   = M.readSnapshot(state, now)
   local result = M.evaluate(state, snap, now)
   result.snapshot = snap
 
-  -- A muted event (SOUNDS.stageN == false) skips playFile but still buzzes: the
-  -- haptic cue has its own on/off setting and is independent of the voice.
+  -- A muted event (SOUNDS.stageN == false, or all sounds off via AUDIO) skips
+  -- playFile but still buzzes: the haptic cue has its own on/off setting.
+  local audio = M.PARAMS.AUDIO ~= false
   if result.playStage2 then
-    if M.SOUNDS.stage2 then playFile(M.SOUNDS.stage2) end
-    warnHaptic(2)
+    if audio and M.SOUNDS.stage2 then playFile(M.SOUNDS.stage2) end
+    warnHaptic("stage2")
+    wakeDisplay()
   elseif result.playStage1 then
-    if M.SOUNDS.stage1 then playFile(M.SOUNDS.stage1) end
-    warnHaptic(1)
+    if audio and M.SOUNDS.stage1 then playFile(M.SOUNDS.stage1) end
+    warnHaptic("stage1")
+    wakeDisplay()
   end
-  if result.playCfgErr then
+  if result.playCfgErr and audio then
     playFile(M.SOUNDS.cfgerr)
+  end
+  if result.playLost and audio and M.SOUNDS.lost then
+    playFile(M.SOUNDS.lost)
   end
 
   return result
