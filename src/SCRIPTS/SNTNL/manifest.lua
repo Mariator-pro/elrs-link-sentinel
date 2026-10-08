@@ -23,11 +23,11 @@ return function(core)
     },
 
     fields = {
-      { key = "warnOffsetDb", page = "warnings", label = "Stage 1",
+      { key = "warnOffsetDb", page = "warnings", label = "Link quality low",
         min = L.warnOffsetDb.min, max = L.warnOffsetDb.max, step = L.warnOffsetDb.step,
         default = D.warnOffsetDb, prefix = "+", unit = "dB",
         hint = "Early warning %v before the RSSI (1RSS/2RSS) limit" },
-      { key = "rqlyThreshold", page = "warnings", label = "Stage 2",
+      { key = "rqlyThreshold", page = "warnings", label = "Link quality critical",
         min = L.rqlyThreshold.min, max = L.rqlyThreshold.max, step = L.rqlyThreshold.step,
         default = D.rqlyThreshold, unit = "%",
         hint = "Critical alert when RQly drops below %v" },
@@ -42,8 +42,8 @@ return function(core)
 
     -- Rows on the Alerts page, in core.SOUND_KEYS order
     sounds = {
-      stage1 = { label = "Stage 1", hint = "Signal close to the limit" },
-      stage2 = { label = "Stage 2", hint = "Signal at the limit and link quality low" },
+      stage1 = { label = "Link quality low", hint = "Signal close to the limit" },
+      stage2 = { label = "Link quality critical", hint = "Signal at the limit and link quality low" },
       lost   = { label = "Link lost", hint = "Link gone in flight (off by default)" },
       conn   = { label = "Link connected", hint = "Link up for a new flight (off by default)" },
       rec    = { label = "Link recovered", hint = "Link back after a loss in flight (off by default)" },

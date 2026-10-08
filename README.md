@@ -203,11 +203,11 @@ Thresholds and sounds are set in **Flight Bag**, a settings tool shared by sever
 Link Sentinel's rows sit under the heading **Link Sentinel**:
 
 - **Warnings**
-  - **Stage 1**: how early the first warning comes, as a margin above the RF mode's sensitivity limit. **10-30 dB** (default 10). Higher warns earlier.
-  - **Stage 2**: the link quality (RQly) below which the warning turns critical. **30-70 %** (default 42). Higher warns earlier.
+  - **Link quality low** (Stage 1): how early the first warning comes, as a margin above the RF mode's sensitivity limit. **10-30 dB** (default 10). Higher warns earlier.
+  - **Link quality critical** (Stage 2): the link quality (RQly) below which the warning turns critical. **30-70 %** (default 42). Higher warns earlier.
 - **Alerts**
-  - **Sounds**, **Vibration**, **Strength**: shared by all Flight Bag scripts. `Sounds Off` silences every Link Sentinel tone. Vibration (off by default) gives one pulse for Stage 1 and two for Stage 2, independent of the sound.
-  - **Stage 1** / **Stage 2**: the tone per stage: `Off`, `Default` or any `.wav` you put into `/SOUNDS/en/SCRIPTS/SNTNL/`. **Play** previews it.
+  - **Sounds**, **Vibration**, **Strength**: shared by all Flight Bag scripts. `Sounds Off` silences every Link Sentinel tone. Vibration (off by default) gives one pulse for Link quality low (Stage 1) and two for Link quality critical (Stage 2), independent of the sound.
+  - **Link quality low** / **Link quality critical**: the tone for Stage 1 / Stage 2: `Off`, `Default` or any `.wav` you put into `/SOUNDS/en/SCRIPTS/SNTNL/`. **Play** previews it.
   - **Link lost**: `Off` by default. `Default` says "Radio link lost", `telelost.wav` says "Radio link telemetry lost". It plays once when the link is gone for 1.5 s during a flight, not after a disarm. Without `FM` from the flight controller it also plays when you unplug the battery after landing.
   - **Link connected**: `Off` by default. `Default` says "Radio link connected". It plays once when the link comes up for a new flight (model powered on).
   - **Link recovered**: `Off` by default. `Default` says "Radio link recovered". It plays once when the link comes back after it was lost during an armed flight.
@@ -224,7 +224,7 @@ Tap the **Link Sentinel** icon for **Reset settings** and the version. A warning
 - **Widget shows "Core missing / Reinstall Link Sentinel", or the function script errors on load:** `core.lua` is not where it should be. Make sure `/SCRIPTS/SNTNL/core.lua` exists on the SD card, since both variants depend on it.
 - **Widget shows "Configuration error / Please check Tool Flight Bag" (and the config-error tone plays):** One of the mandatory sensors (`RFMD`, `1RSS`, `RQly`) is missing. Open **Tools → Flight Bag** and tap the Link Sentinel icon (it carries a warning sign): the popup names the missing sensors, e.g. `Missing sensors: RQly` / `Check sensors config`. Run a telemetry discovery on the radio while the link is up.
 - **Widget shows `FM --` while everything else works:** The flight mode comes from the flight controller's telemetry, not from ExpressLRS. Warnings and the link display are not affected. Enable telemetry on the flight controller (INAV: `feature TELEMETRY`), see [`docs/compatibility.md`](docs/compatibility.md#setup).
-- **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/SNTNL/` (the `en/` folder is mandatory even if your radio is set to another language). The quickest check is Flight Bag: on the **Alerts** page dive into **Stage 1** or **Stage 2** and press **Play**, which confirms the file is found and your radio's volume is up.
+- **No warning tone is ever played:** Make sure the WAV files really sit in `/SOUNDS/en/SCRIPTS/SNTNL/` (the `en/` folder is mandatory even if your radio is set to another language). The quickest check is Flight Bag: on the **Alerts** page dive into **Link quality low** or **Link quality critical** and press **Play**, which confirms the file is found and your radio's volume is up.
 - **Permanent warning / range shows "--" despite good reception:** Your ELRS setup is probably using a mode whose sensitivity limit isn't yet listed in `core.lua`. Please [open an issue](../../issues) so it can be added.
 
 ---

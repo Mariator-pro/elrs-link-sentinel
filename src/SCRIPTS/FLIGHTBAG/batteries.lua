@@ -273,8 +273,8 @@ return function(ctx)
     field(5, "Cells", p.cells .. "S")
     field(6, "Packs", tostring(#p.instances), true)
     field(7, "Statistics", nil, true)
-    field(8, "Low", p.warnPct and (p.warnPct .. " %") or (cfg.warnPct .. " % (default)"))
-    field(9, "Critical", p.critPct and (p.critPct .. " %") or (cfg.critPct .. " % (default)"))
+    field(8, "Battery low", p.warnPct and (p.warnPct .. " %") or (cfg.warnPct .. " % (default)"))
+    field(9, "Battery critical", p.critPct and (p.critPct .. " %") or (cfg.critPct .. " % (default)"))
     return lines
   end
 
@@ -533,7 +533,7 @@ return function(ctx)
   local function validateProfile()
     if S.prof.manufacturer == "" then ui.openAlert("Manufacturer required"); return false end
     if S.prof.warnPct and S.prof.critPct and not (S.prof.warnPct > S.prof.critPct) then
-      ui.openAlert("Low must be above Critical"); return false
+      ui.openAlert("Battery low must be above Battery critical"); return false
     end
     return true
   end
