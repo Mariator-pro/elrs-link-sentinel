@@ -84,18 +84,21 @@ M.HAPTIC_PULSES = { stage1 = 1, stage2 = 2 }
 -- absolute path bypasses EdgeTX's per-language resolution so the same files
 -- play regardless of the radio's language setting.
 M.SOUND_DIR      = "/SOUNDS/en/SCRIPTS/SNTNL/"
-M.SOUND_KEYS     = { "stage1", "stage2", "lost" }
-M.SOUND_DEFAULTS = { stage1 = "stage1.wav", stage2 = "stage2.wav", lost = "linklost.wav" }
+M.SOUND_KEYS     = { "stage1", "stage2", "lost", "conn", "rec" }
+M.SOUND_DEFAULTS = { stage1 = "stage1.wav", stage2 = "stage2.wav", lost = "linklost.wav",
+                     conn = "linkconn.wav", rec = "linkrec.wav" }
 -- Full paths that play (false = muted), overlaid from the config.
 M.SOUNDS = {
   stage1 = M.SOUND_DIR .. "stage1.wav",
   stage2 = M.SOUND_DIR .. "stage2.wav",
   lost   = false,
+  conn   = false,
+  rec    = false,
   cfgerr = M.SOUND_DIR .. "cfgerr.wav",
 }
 -- Sounds that are off until picked: a missing config entry means Off, so the
 -- settings tool's "Default" is written out as the file name (see saveConfig).
-local SOUND_DEFAULT_OFF = { lost = true }
+local SOUND_DEFAULT_OFF = { lost = true, conn = true, rec = true }
 
 -- ---------------------------------------------------------------------------
 -- Optional configuration overlay. The settings tool (/SCRIPTS/TOOLS/FLIGHTBAG.lua)
@@ -691,6 +694,9 @@ function M.evaluate(state, snap, now)
   -- Link lost tone: once per flight end, when armed or unknown before the loss.
   if snap.rssiValid then state.lostTone = armed or not armedKnown end
   if event == "end" and state.lostTone then result.playLost = true end
+  -- Link up for a new flight, or back after a link failure while armed.
+  if event == "new" then result.playConn = true end
+  if event == "resume" then result.playRec = true end
 
   -- Telemetry lost -> stay silent (ELRS alarms on a real loss itself). Do NOT reset
   -- immediately: a brief gap must not wipe an active warning, or both stages re-debounce
@@ -882,6 +888,12 @@ function M.update(state, now)
   end
   if result.playLost and audio and M.SOUNDS.lost then
     playFile(M.SOUNDS.lost)
+  end
+  if result.playConn and audio and M.SOUNDS.conn then
+    playFile(M.SOUNDS.conn)
+  end
+  if result.playRec and audio and M.SOUNDS.rec then
+    playFile(M.SOUNDS.rec)
   end
 
   return result

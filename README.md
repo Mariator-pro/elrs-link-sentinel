@@ -55,7 +55,7 @@ The sentinel reads the receiver's telemetry values (RSSI of both antennas, link 
 - **Link Warning:** The antenna(s) are near the current mode's sensitivity limit. *"Time to turn back toward the pilot."*
 - **Link Critical:** Same condition, plus packets starting to drop (RQly < 42 %). *"Come back now."*
 
-If telemetry is lost completely, the sentinel stays silent by default, because EdgeTX itself already raises an alarm in that case. An optional **Link lost** announcement can be switched on in the settings.
+If telemetry is lost completely, the sentinel stays silent by default, because EdgeTX itself already raises an alarm in that case. Optional **Link lost**, **Link connected** and **Link recovered** announcements can be switched on in the settings.
 
 If telemetry is up but the required sensors (`RFMD`, `1RSS`, `RQly`) never show up, it plays a separate **configuration-error tone** so you know it cannot warn you. The tone repeats every 30 seconds until the sensors appear.
 
@@ -209,6 +209,8 @@ Link Sentinel's rows sit under the heading **Link Sentinel**:
   - **Sounds**, **Vibration**, **Strength**: shared by all Flight Bag scripts. `Sounds Off` silences every Link Sentinel tone. Vibration (off by default) gives one pulse for Stage 1 and two for Stage 2, independent of the sound.
   - **Stage 1** / **Stage 2**: the tone per stage: `Off`, `Default` or any `.wav` you put into `/SOUNDS/en/SCRIPTS/SNTNL/`. **Play** previews it.
   - **Link lost**: `Off` by default. `Default` says "Radio link lost", `telelost.wav` says "Radio link telemetry lost". It plays once when the link is gone for 1.5 s during a flight, not after a disarm. Without `FM` from the flight controller it also plays when you unplug the battery after landing.
+  - **Link connected**: `Off` by default. `Default` says "Radio link connected". It plays once when the link comes up for a new flight (model powered on).
+  - **Link recovered**: `Off` by default. `Default` says "Radio link recovered". It plays once when the link comes back after it was lost during an armed flight.
 
 Tap the **Link Sentinel** icon for **Reset settings** and the version. A warning sign on the icon means something needs attention (for example missing sensors or no settings file yet); the popup says what to do.
 

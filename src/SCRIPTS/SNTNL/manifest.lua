@@ -45,6 +45,8 @@ return function(core)
       stage1 = { label = "Stage 1", hint = "Signal close to the limit" },
       stage2 = { label = "Stage 2", hint = "Signal at the limit and link quality low" },
       lost   = { label = "Link lost", hint = "Link gone in flight (off by default)" },
+      conn   = { label = "Link connected", hint = "Link up for a new flight (off by default)" },
+      rec    = { label = "Link recovered", hint = "Link back after a loss in flight (off by default)" },
     },
 
     resets = {
