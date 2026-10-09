@@ -26,7 +26,7 @@ return function(core)
       { key = "warnOffsetDb", page = "warnings", label = "Link quality low",
         min = L.warnOffsetDb.min, max = L.warnOffsetDb.max, step = L.warnOffsetDb.step,
         default = D.warnOffsetDb, prefix = "+", unit = "dB",
-        hint = "Early warning %v before the RSSI (1RSS/2RSS) limit" },
+        hint = "Early warning %v before the RSSI limit (1RSS/2RSS)" },
       { key = "rqlyThreshold", page = "warnings", label = "Link quality critical",
         min = L.rqlyThreshold.min, max = L.rqlyThreshold.max, step = L.rqlyThreshold.step,
         default = D.rqlyThreshold, unit = "%",

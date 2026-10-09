@@ -17,7 +17,7 @@ local SENSOR_FIELDS = {
       "warnings. 4S full ~16.8V, empty ~14.0V." } },
   { key = "current",  label = "Current", desc = {
       "Live current draw (A). Feeds the",
-      "remaining-time estimate. e.g. 0-120A." } },
+      "remaining-time estimate, e.g. 0-120A." } },
   { key = "capacity", label = "Capacity", desc = {
       "Consumed mAh, counts UP from 0 (or %,",
       "see Capacity unit). Main warn trigger." } },
