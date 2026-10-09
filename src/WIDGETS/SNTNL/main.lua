@@ -802,9 +802,8 @@ local function drawPre(W, H, x0, y0, d, state)
   end
   local function infoRow(y)
     drawKV(x0, y, "RSSI ", d.linkRssi and (d.linkRssi .. " dBm") or "--")
-    local tx  = d.tpwr and (d.tpwr .. " mW") or "--"
-    local lbl = textW("TX POWER " .. tx, SMLSIZE) <= W - half and "TX POWER " or "TX PWR "   -- short label on narrow zones
-    drawKV(x0 + half, y, lbl, tx)
+    local tx = d.tpwr and (d.tpwr .. " mW") or "--"
+    drawKV(x0 + W - textW("TX ", SMLSIZE) - textW(tx, SMLSIZE), y, "TX ", tx)   -- right-aligned like MODE
   end
 
   if not mainFitsFull(W, H) then
@@ -844,24 +843,14 @@ local function drawPre(W, H, x0, y0, d, state)
   local capX  = x0 + textW(num, bigF) + sx(3)
   dtext(capX, top + bigH - fontH(unitF), "%", lqCol, unitF)
   capX = capX + textW("%", unitF) + sx(6)
-  -- MODE above the value only when it clears the heartbeat dot, else beside it
-  local mcapY   = top + bigH - fontH(0) - smlH
-  local stacked = mcapY >= sx(12)
-  -- above the value a "Full" mode moves into the caption: "MODE (Full)" over "X100Hz"
-  local mCap, mVal = "MODE", d.rfmode
-  local base = stacked and string.match(d.rfmode, "^(.-) Full$")
-  if base then mCap, mVal = "MODE (Full)", base end
-  local modeX = x0 + W - (stacked and math.max(textW(mVal, 0), textW(mCap, SMLSIZE))
-                                   or (textW(mCap, SMLSIZE) + sx(4) + textW(mVal, 0)))
+  -- MODE beside its value on the value's line
+  local mVal  = d.rfmode
+  local modeX = x0 + W - (textW("MODE", SMLSIZE) + sx(4) + textW(mVal, 0))
   if capX + textW("LQ", SMLSIZE) <= modeX - sx(4) then
     dtext(capX, top + bigH - smlH, "LQ", COLORS.muted, SMLSIZE)
   end
   dtext(x0 + W - textW(mVal, 0), top + bigH - fontH(0), mVal, COLORS.fg, 0)
-  if stacked then
-    dtext(x0 + W - textW(mCap, SMLSIZE), mcapY, mCap, COLORS.muted, SMLSIZE)
-  else
-    dtext(modeX, top + bigH - smlH, mCap, COLORS.muted, SMLSIZE)
-  end
+  dtext(modeX, top + bigH - smlH, "MODE", COLORS.muted, SMLSIZE)
   local fixed = bigH + 2 * smlH
   local gap   = math.max(0, math.floor((bottomY - top - fixed) / 3))
   local infoY = top + bigH + gap
