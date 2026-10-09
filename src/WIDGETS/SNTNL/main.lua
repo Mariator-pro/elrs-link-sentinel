@@ -227,26 +227,28 @@ local function buildDisplay(ctx, r)
     linkRssi  = r.linkRssi,                              -- range bar: governing (stronger) antenna
     antNum    = (ant == 1) and 2 or 1,
     tpwr      = snap.tpwr,                            -- nil -> "--"
+    reserve   = r.pwrReservePct,                      -- DYN: lightened end of the range bar
     fm        = snap.fm ~= "" and snap.fm or nil,     -- nil or empty -> "--"
     rqly      = snap.rqly,
     modLine   = ctx.state.modLine,                    -- CRSF device-info line (nil until detected)
   }
 end
 
--- Anti-flicker smoothing, refresh-paced: +-1%/frame, +-4% when far (>8%).
--- Snaps on the first frame; the caller resets it on link loss.
-local function smoothRange(ctx, target)
+-- Anti-flicker smoothing of ctx[key], refresh-paced: +-1%/frame, +-4% when far
+-- (>8%). Snaps on the first frame; the caller resets it on link loss.
+local function smoothRange(ctx, key, target)
   if target == nil then return end
-  if ctx.rangeSmoothed == nil then
-    ctx.rangeSmoothed = target
+  local cur = ctx[key]
+  if cur == nil then
+    ctx[key] = target
     return
   end
-  local diff = target - ctx.rangeSmoothed
+  local diff = target - cur
   local step = (math.abs(diff) > RANGE_JUMP) and RANGE_STEP_BIG or RANGE_STEP_SMALL
   if diff > 0 then
-    ctx.rangeSmoothed = math.min(target, ctx.rangeSmoothed + step)
+    ctx[key] = math.min(target, cur + step)
   elseif diff < 0 then
-    ctx.rangeSmoothed = math.max(target, ctx.rangeSmoothed - step)
+    ctx[key] = math.max(target, cur - step)
   end
 end
 
@@ -438,21 +440,26 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Range bar: track + stage-coloured fill (length = range %), status word (OK/WARNING/
--- CRITICAL) two-tone inside it. d.range == nil (unknown mode) -> full bar. The word is
+-- CRITICAL) two-tone inside it. d.range == nil (unknown mode) -> full bar. With
+-- dynamic TX power below the maximum the end the bar would lose at full power
+-- (d.solid..d.range) is lightened and the word turns light there. The word is
 -- drawn only when the bar is tall enough for it; on a thin bar the fill colour alone
 -- carries the stage.
+local RESERVE_OPACITY = 9   -- 0 opaque .. 15 invisible
 local function drawRangeBar(x, y, w, barH, d, sc)
   lcd.drawFilledRectangle(x, y, w, barH, COLORS.track)
   local p     = (d.range == nil) and 100 or math.min(100, math.max(0, d.range))
   local fillW = math.floor(w * p / 100)
-  lcd.drawFilledRectangle(x, y, fillW, barH, sc)
+  local solidW = (d.range and d.solid) and math.floor(w * math.min(p, math.max(0, d.solid)) / 100) or fillW
+  lcd.drawFilledRectangle(x, y, solidW, barH, sc)
+  if fillW > solidW then lcd.drawFilledRectangle(x + solidW, y, fillW - solidW, barH, sc, RESERVE_OPACITY) end
   if barH < fontH(SMLSIZE) - sx(5) then return end
   local statusTxt = (d.stage >= 2 and "CRITICAL")
                  or (d.stage >= 1 and "WARNING") or "OK"
   local stFlag = fitFont(statusTxt, w * 0.6, barH - sx(2), nil, true)
   stFlag = stFlag + bold(stFlag)
   drawSplitText(x + sx(4), vcenter(y, barH, stFlag), statusTxt,
-                stFlag, x + fillW, textOnStage(d.stage), COLORS.fg)
+                stFlag, x + solidW, textOnStage(d.stage), COLORS.fg)
 end
 
 -- Header label: module line once CRSF device-info arrived, brand until then.
@@ -1000,7 +1007,7 @@ local function refresh(ctx, event, touchState)
       if ctx.lastRunning and not r.linkLost then
         r = ctx.lastRunning
       else
-        ctx.rangeSmoothed = nil   -- reset smoothing so the next connect snaps fresh
+        ctx.rangeSmoothed, ctx.solidSmoothed = nil, nil   -- next connect snaps fresh
         drawNoLink(ctx)
         return
       end
@@ -1014,8 +1021,15 @@ local function refresh(ctx, event, touchState)
     end
     -- RANGELIMIT from the core; nil for an unknown mode -> bar full + "--".
     local target = core.rangePct(d.linkRssi, d.sensLimit)
-    smoothRange(ctx, target)
+    smoothRange(ctx, "rangeSmoothed", target)
     d.range = (target == nil) and nil or ctx.rangeSmoothed
+    -- fully coloured part: the bar at full TX power (DYN), smoothed the same way
+    if target and d.reserve then
+      smoothRange(ctx, "solidSmoothed", math.max(0, target - d.reserve))
+      d.solid = ctx.solidSmoothed
+    else
+      ctx.solidSmoothed = nil
+    end
     drawMain(W, H, x0, y0, d)
   end)
   if not ok then

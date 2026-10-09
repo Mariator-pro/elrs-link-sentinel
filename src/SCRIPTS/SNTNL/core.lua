@@ -630,6 +630,19 @@ function M.rangePct(rss, sensLimit)
   return pct
 end
 
+-- TX power headroom from the module's Max Power (mW) and Dynamic setting and
+-- the current TPWR: "MAX" (at the maximum, or fixed power), "DYN" (dynamic
+-- power below the maximum) or nil (unknown). With DYN also the part of the
+-- range bar (percentage points) the bar would shrink by at full power: an
+-- uplink RSS gain of 10*log10(Max/TPWR) dB on the mode's scale; nil for an
+-- unknown mode.
+function M.powerHeadroom(maxMw, dynamic, tpwr, sensLimit)
+  if not maxMw or dynamic == nil or not tpwr then return nil end
+  if not dynamic or tpwr >= maxMw then return "MAX" end
+  if not sensLimit or sensLimit == 0 or tpwr <= 0 then return "DYN" end
+  return "DYN", 10 * math.log(maxMw / tpwr, 10) * 100 / (-50 - sensLimit)
+end
+
 -- Setup errors that need no telemetry, one text each (the settings tool lists
 -- them; a widget only shows that there is one): mandatory sensors not
 -- discovered in the model. state as kept by update; without it a fresh one.
@@ -695,7 +708,11 @@ function M.evaluate(state, snap, now)
   if snap.rssiValid then state.lostTone = armed or not armedKnown end
   if event == "end" and state.lostTone then result.playLost = true end
   -- Link up for a new flight, or back after a link failure while armed.
-  if event == "new" then result.playConn = true end
+  if event == "new" then
+    result.playConn = true
+    -- re-read Max Power / Dynamic: another model may use other module settings
+    state.pwrScan, state.pwrMax, state.pwrDyn = { id = 1 }, nil, nil
+  end
   if event == "resume" then result.playRec = true end
 
   -- Telemetry lost -> stay silent (ELRS alarms on a real loss itself). Do NOT reset
@@ -797,6 +814,7 @@ function M.evaluate(state, snap, now)
   result.maxRangePct = state.maxRangePct
   result.maxTpwr     = state.maxTpwr
   result.maxStage    = state.maxStage            -- highest warning stage of the flight (nil: none)
+  result.pwrTag, result.pwrReservePct = M.powerHeadroom(state.pwrMax, state.pwrDyn, snap.tpwr, sensLimit)
   return result
 end
 
@@ -814,15 +832,20 @@ end
 
 -- ---------------------------------------------------------------------------
 -- CRSF device info: TX module name + firmware for a display (state.modLine, nil
--- until known). The caller pops the CRSF queue once per cycle and hands every
--- frame to handleFrame, so other consumers in the same script get them too;
--- pollModule pings until the module has answered. Not part of update(): a
--- script without a display has no use for it.
+-- until known), and the module's Max Power / Dynamic setting (state.pwrMax in
+-- mW, state.pwrDyn) read from its parameter list after each new link. The
+-- caller pops the CRSF queue once per cycle and hands every frame to
+-- handleFrame, so other consumers in the same script get them too; pollModule
+-- sends the pings and parameter reads. Not part of update(): a script without
+-- a display has no use for it.
 -- ---------------------------------------------------------------------------
 local CRSF_PING, CRSF_DEVICE_INFO = 0x28, 0x29
+local CRSF_PARAM_ENTRY, CRSF_PARAM_READ = 0x2B, 0x2C
 local ADDR_BROADCAST, ADDR_RADIO  = 0x00, 0xEA
 local ADDR_TX_MODULE              = 0xEE   -- the only sender accepted (not FC or receiver)
 local DEV_PING_MS                 = 1000
+local PARAM_RETRY_MS, PARAM_TRIES = 500, 3 -- no answer: ask again, then skip the parameter
+local PARAM_SELECT                = 9      -- text selection, e.g. "10;25;50;100;250"
 
 -- Null-terminated string from byte array `b` at `from`; returns it and the index after the 0.
 local function crsfReadString(b, from)
@@ -834,23 +857,84 @@ local function crsfReadString(b, from)
   return table.concat(out), i + 1
 end
 
-function M.handleFrame(state, cmd, data)
-  if cmd ~= CRSF_DEVICE_INFO or type(data) ~= "table" or data[2] ~= ADDR_TX_MODULE then return end
+local function deviceInfo(state, data)
   local name, p = crsfReadString(data, 3)
-  -- after the name: serial(4) + hardware(4) + software(4), version in the last three bytes
+  -- after the name: serial(4) + hardware(4) + software(4), version in the last three
+  -- bytes, then the parameter count
   local maj, min, rev = data[p + 9], data[p + 10], data[p + 11]
   if name ~= "" and maj and min and rev then
     state.modLine = string.format("%s (v%d.%d.%d)", name, maj, min, rev)
+    state.paramCount = data[p + 12] or 0
   end
 end
 
--- Once known, no more pings: EdgeTX keeps polling itself, so a module swap still shows.
+-- Parameter entry: field id, chunks still to come, then (over all chunks) parent,
+-- type, name, and for a text selection the options and the selected index.
+local function paramEntry(state, data)
+  local scan = state.pwrScan
+  if not scan or data[3] ~= scan.id then return end   -- not ours (e.g. the ELRS tool's)
+  local left = data[4] or 0
+  if scan.expect and left ~= scan.expect then          -- chunk missed: start the field over
+    scan.buf, scan.chunk, scan.expect, scan.sentAt = nil, 0, nil, nil
+    return
+  end
+  scan.buf = scan.buf or {}
+  for i = 5, #data do scan.buf[#scan.buf + 1] = data[i] end
+  scan.sentAt, scan.tries = nil, 0                     -- answered: next request right away
+  if left > 0 then
+    scan.chunk, scan.expect = (scan.chunk or 0) + 1, left - 1
+    return
+  end
+  local b = scan.buf
+  scan.buf, scan.chunk, scan.expect = nil, 0, nil
+  if b[2] and b[2] % 128 == PARAM_SELECT then
+    local name, p = crsfReadString(b, 3)
+    if name == "Max Power" or name == "Dynamic" then
+      local opts, q = crsfReadString(b, p)
+      local sel, n = b[q], 0
+      for o in string.gmatch(opts .. ";", "([^;]*);") do
+        if n == sel then
+          if name == "Max Power" then state.pwrMax = tonumber(o) else state.pwrDyn = o ~= "Off" end
+        end
+        n = n + 1
+      end
+    end
+  end
+  scan.id = scan.id + 1
+  if state.pwrMax and state.pwrDyn ~= nil then state.pwrScan = nil end
+end
+
+function M.handleFrame(state, cmd, data)
+  if type(data) ~= "table" or data[2] ~= ADDR_TX_MODULE then return end
+  if cmd == CRSF_DEVICE_INFO then deviceInfo(state, data)
+  elseif cmd == CRSF_PARAM_ENTRY then paramEntry(state, data) end
+end
+
+-- Pings until the module has answered (then EdgeTX keeps polling itself, so a
+-- module swap still shows); while a scan runs, reads the parameters one by one.
 function M.pollModule(state, now)
-  if state.modLine or not crossfireTelemetryPush then return end
+  if not crossfireTelemetryPush then return end
   now = now or nowMs()
-  if state.lastDevPing == nil or now - state.lastDevPing >= DEV_PING_MS then
-    crossfireTelemetryPush(CRSF_PING, { ADDR_BROADCAST, ADDR_RADIO })
-    state.lastDevPing = now
+  if not state.modLine then
+    if state.lastDevPing == nil or now - state.lastDevPing >= DEV_PING_MS then
+      crossfireTelemetryPush(CRSF_PING, { ADDR_BROADCAST, ADDR_RADIO })
+      state.lastDevPing = now
+    end
+    return
+  end
+  local scan = state.pwrScan
+  if not scan then return end
+  if scan.sentAt and now - scan.sentAt < PARAM_RETRY_MS then return end
+  if scan.sentAt then
+    scan.tries = scan.tries + 1
+    if scan.tries >= PARAM_TRIES then
+      scan.id, scan.tries, scan.buf, scan.chunk, scan.expect = scan.id + 1, 0, nil, 0, nil
+    end
+  end
+  if scan.id > state.paramCount then state.pwrScan = nil; return end   -- not found: no tag
+  -- false: send buffer busy, ask again next cycle
+  if crossfireTelemetryPush(CRSF_PARAM_READ, { ADDR_TX_MODULE, ADDR_RADIO, scan.id, scan.chunk or 0 }) ~= false then
+    scan.sentAt, scan.tries = now, scan.tries or 0
   end
 end
 

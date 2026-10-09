@@ -192,6 +192,7 @@ All files are available in the matching folders of this repository, so just copy
 - If you enabled haptic feedback, the radio vibrates together with each warning tone.
 - Each warning switches a dimmed display back on (restarts the backlight timeout).
 - On the widget, the range bar fills towards 100 % and changes color (green → yellow → red) in lockstep with the audio warning.
+- With dynamic TX power the widget reads the module's Max Power after connecting. While the module sends below it, the end of the range bar is lighter: that part of the bar goes away once the module sends at full power.
 - Before the flight the widget shows a preflight page (LQ, mode, link status, RSSI, TX power). Once the link is OK, a bar at the bottom right counts down 15 s to the flight view; arming switches at once. After the flight (1.5 s without link) an end page shows the flight's lowest LQ, highest RANGELIMIT, highest TX power and the mode for 30 s.
 
 ---
