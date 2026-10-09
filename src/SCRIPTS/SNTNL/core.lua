@@ -643,6 +643,14 @@ function M.powerHeadroom(maxMw, dynamic, tpwr, sensLimit)
   return "DYN", 10 * math.log(maxMw / tpwr, 10) * 100 / (-50 - sensLimit)
 end
 
+-- RSS (dBm) as it would read at REF_MW: removes the TX power, so dynamic power
+-- steps no longer move it (a model finder can follow it). nil without RSS or TPWR.
+M.REF_MW = 25
+function M.rssiAtRef(rss, tpwr)
+  if not rss or rss == 0 or not tpwr or tpwr <= 0 then return nil end
+  return rss - 10 * math.log(tpwr / M.REF_MW, 10)
+end
+
 -- Setup errors that need no telemetry, one text each (the settings tool lists
 -- them; a widget only shows that there is one): mandatory sensors not
 -- discovered in the model. state as kept by update; without it a fresh one.
@@ -806,6 +814,7 @@ function M.evaluate(state, snap, now)
   result.stage     = sounding
   result.sensLimit = sensLimit              -- raw (no offset) -> widget's rangePct
   result.linkRssi  = linkRssi               -- governing RSS (stronger antenna) -> range bar
+  result.refRssi   = M.rssiAtRef(linkRssi, snap.tpwr)   -- linkRssi at REF_MW (nil without TPWR)
   result.modeName  = M.MODE_NAMES[rfmd]     -- nil if unknown (widget falls back to number)
   result.armed     = armed                  -- false while unknown
   result.rangePct    = rangePct               -- RANGELIMIT now (nil for an unknown mode)
