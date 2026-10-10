@@ -57,24 +57,39 @@ local RANGE_JUMP       = 8
 -- Color palettes. Set per frame from the Theme option. Escalation colors are
 -- theme-independent.
 -- ---------------------------------------------------------------------------
+-- Colours that get mixed by hand are kept as { r, g, b } in rgb, the lcd colour
+-- is made from them.
+local function rgb(c) return lcd.RGB(c[1], c[2], c[3]) end
+
+-- a mixed towards b by t (0..1), as an lcd colour.
+local function mixRGB(a, b, t)
+  local function m(i) return math.floor(a[i] + (b[i] - a[i]) * t + 0.5) end
+  return lcd.RGB(m(1), m(2), m(3))
+end
+
+local DARK_RGB  = { panel = { 18, 20, 18 }, track = { 55, 58, 55 }, accent = { 124, 210, 48 } }
+local LIGHT_RGB = { track = { 200, 200, 205 }, accent = { 1, 152, 8 } }
 local DARK = {
   transparent = false,
-  panel  = lcd.RGB( 18,  20,  18),
+  panel  = rgb(DARK_RGB.panel),
   fg     = lcd.RGB(235, 235, 235),
   muted  = lcd.RGB(150, 150, 150),
-  track  = lcd.RGB( 55,  58,  55),
-  accent = lcd.RGB(124, 210,  48),
+  track  = rgb(DARK_RGB.track),
+  accent = rgb(DARK_RGB.accent),
+  rgb    = DARK_RGB,
 }
 local LIGHT = {
   transparent = true,
   panel  = nil,
   fg     = lcd.RGB(  0,   0,   0),
   muted  = lcd.RGB( 90,  90,  90),
-  track  = lcd.RGB(200, 200, 205),
-  accent = lcd.RGB(  1, 152,   8),
+  track  = rgb(LIGHT_RGB.track),
+  accent = rgb(LIGHT_RGB.accent),
+  rgb    = LIGHT_RGB,
 }
-local WARN_COL = lcd.RGB(255, 180,   0)  -- yellow / Stage 1
-local CRIT_COL = lcd.RGB(220,  40,  40)  -- red    / Stage 2
+local WARN_RGB, CRIT_RGB = { 255, 180, 0 }, { 220, 40, 40 }
+local WARN_COL = rgb(WARN_RGB)  -- yellow / Stage 1
+local CRIT_COL = rgb(CRIT_RGB)  -- red    / Stage 2
 local ON_DARK  = lcd.RGB(245, 245, 245)  -- text on the red status bar
 
 -- Mascot-eye colours, theme-independent (light eyeball, dark rim/pupil).
@@ -300,14 +315,12 @@ end
 -- blended by hand between the background and red (light theme: white, the real
 -- background there depends on the radio theme).
 local HEARTBEAT_PERIOD = 200   -- getTime ticks
-local HEARTBEAT_RED    = { 220, 40, 40 }
-local HEARTBEAT_BG     = { dark = { 18, 20, 18 }, light = { 255, 255, 255 } }
+local HEARTBEAT_BG     = { dark = DARK_RGB.panel, light = { 255, 255, 255 } }
 local function drawHeartbeat(ctx)
   local t  = 0.5 - 0.5 * math.cos(2 * math.pi * (getTime() % HEARTBEAT_PERIOD) / HEARTBEAT_PERIOD)
   local bg = COLORS.transparent and HEARTBEAT_BG.light or HEARTBEAT_BG.dark
-  local function mix(i) return math.floor(bg[i] + (HEARTBEAT_RED[i] - bg[i]) * t + 0.5) end
   local r = sx(3)
-  lcd.drawFilledCircle(ctx.zone.w - sx(4) - r, sx(4) + r, r, lcd.RGB(mix(1), mix(2), mix(3)))
+  lcd.drawFilledCircle(ctx.zone.w - sx(4) - r, sx(4) + r, r, mixRGB(bg, CRIT_RGB, t))
 end
 
 -- ---------------------------------------------------------------------------
@@ -442,17 +455,23 @@ end
 -- Range bar: track + stage-coloured fill (length = range %), status word (OK/WARNING/
 -- CRITICAL) two-tone inside it. d.range == nil (unknown mode) -> full bar. With
 -- dynamic TX power below the maximum the end the bar would lose at full power
--- (d.solid..d.range) is lightened and the word turns light there. The word is
+-- (d.solid..d.range) is lightened (stage colour mixed with the track) and the word turns light there. The word is
 -- drawn only when the bar is tall enough for it; on a thin bar the fill colour alone
 -- carries the stage.
-local RESERVE_OPACITY = 9   -- 0 opaque .. 15 invisible
+-- Lightened end: the stage colour mixed with the track, drawn opaque (the same
+-- colour as Flight Wingman's bar, which needs it opaque for its round corners).
+local RESERVE_TRACK = 0.6   -- share of the track in the mix
+local STAGE_RGB = { [1] = WARN_RGB, [2] = CRIT_RGB }
+local function reserveColor(stage)
+  return mixRGB(STAGE_RGB[stage] or COLORS.rgb.accent, COLORS.rgb.track, RESERVE_TRACK)
+end
 local function drawRangeBar(x, y, w, barH, d, sc)
   lcd.drawFilledRectangle(x, y, w, barH, COLORS.track)
   local p     = (d.range == nil) and 100 or math.min(100, math.max(0, d.range))
   local fillW = math.floor(w * p / 100)
   local solidW = (d.range and d.solid) and math.floor(w * math.min(p, math.max(0, d.solid)) / 100) or fillW
   lcd.drawFilledRectangle(x, y, solidW, barH, sc)
-  if fillW > solidW then lcd.drawFilledRectangle(x + solidW, y, fillW - solidW, barH, sc, RESERVE_OPACITY) end
+  if fillW > solidW then lcd.drawFilledRectangle(x + solidW, y, fillW - solidW, barH, reserveColor(math.min(2, d.stage))) end
   if barH < fontH(SMLSIZE) - sx(5) then return end
   local statusTxt = (d.stage >= 2 and "CRITICAL")
                  or (d.stage >= 1 and "WARNING") or "OK"
