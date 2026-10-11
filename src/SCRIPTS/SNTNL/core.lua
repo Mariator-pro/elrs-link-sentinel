@@ -630,6 +630,13 @@ function M.rangePct(rss, sensLimit)
   return pct
 end
 
+-- Stage 1 threshold as RANGELIMIT % (where the range bar marks the warning):
+-- the sensitivity limit plus WARN_OFFSET_DB. nil for an unknown mode.
+function M.warnPct(sensLimit)
+  if not sensLimit or sensLimit == 0 then return nil end
+  return M.rangePct(sensLimit + M.PARAMS.WARN_OFFSET_DB, sensLimit)
+end
+
 -- TX power headroom from the module's Max Power (mW) and Dynamic setting and
 -- the current TPWR: "MAX" (at the maximum, or fixed power), "DYN" (dynamic
 -- power below the maximum) or nil (unknown). With DYN also the part of the

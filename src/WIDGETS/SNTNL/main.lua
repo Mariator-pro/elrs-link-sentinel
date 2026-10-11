@@ -455,7 +455,8 @@ end
 -- Range bar: track + stage-coloured fill (length = range %), status word (OK/WARNING/
 -- CRITICAL) two-tone inside it. d.range == nil (unknown mode) -> full bar. With
 -- dynamic TX power below the maximum the end the bar would lose at full power
--- (d.solid..d.range) is lightened (stage colour mixed with the track) and the word turns light there. The word is
+-- (d.solid..d.range) is lightened (stage colour mixed with the track) and the word turns light there. A yellow
+-- tick marks the stage 1 threshold (not for an unknown mode). The word is
 -- drawn only when the bar is tall enough for it; on a thin bar the fill colour alone
 -- carries the stage.
 -- Lightened end: the stage colour mixed with the track, drawn opaque (the same
@@ -472,6 +473,12 @@ local function drawRangeBar(x, y, w, barH, d, sc)
   local solidW = (d.range and d.solid) and math.floor(w * math.min(p, math.max(0, d.solid)) / 100) or fillW
   lcd.drawFilledRectangle(x, y, solidW, barH, sc)
   if fillW > solidW then lcd.drawFilledRectangle(x + solidW, y, fillW - solidW, barH, reserveColor(math.min(2, d.stage))) end
+  -- Stage 1 mark, as the tick marks on Lipo Nanny's battery bar
+  local warn = d.range and core.warnPct(d.sensLimit)
+  if warn then
+    local tickW = math.max(sx(2), 2)
+    lcd.drawFilledRectangle(x + math.floor(w * warn / 100) - math.floor(tickW / 2), y - sx(1), tickW, barH + sx(2), WARN_COL)
+  end
   if barH < fontH(SMLSIZE) - sx(5) then return end
   local statusTxt = (d.stage >= 2 and "CRITICAL")
                  or (d.stage >= 1 and "WARNING") or "OK"
