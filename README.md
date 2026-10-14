@@ -20,6 +20,7 @@ A small EdgeTX project that watches your ExpressLRS link in the background and a
 - [🧩 Script variants](#-script-variants)
 - [🧰 Requirements](#-requirements)
 - [📥 Installation](#-installation)
+- [⚙️ Customizing](#️-customizing)
 - [🛠️ Troubleshooting](#️-troubleshooting)
 - [💡 Credits](#-credits)
 - [🤝 Contributing](#-contributing)
@@ -194,11 +195,13 @@ All files are available in the matching folders of this repository, so just copy
 - With dynamic TX power the widget reads the module's Max Power after connecting. While the module sends below it, the end of the range bar is lighter: that part of the bar goes away once the module sends at full power.
 - Before the flight the widget shows a preflight page (LQ with a bar, mode, RSSI, TX power, link status). Once the link is OK, a countdown beside the status runs 15 s to the flight view; arming switches at once. After the flight (1.5 s without link) an end page shows the flight's lowest LQ, highest RANGELIMIT, highest TX power and the mode for 30 s.
 
-### 4. Settings
-
-Thresholds, sounds and vibration are set in **Flight Bag**, the settings tool shared by several EdgeTX scripts (**SYS → Tools → Apps → Flight Bag**). All pages and rows are described in the [Flight Bag guide](https://github.com/Mariator-pro/edgetx-flight-wingman/blob/main/docs/flightbag.md). After **Save**, changes apply within a few seconds for both variants, no restart needed.
-
 > **Updating from an older version?** Flight Bag removes the old "Link Sentinel" Tools entry on first start. If it still shows up, delete `/SCRIPTS/TOOLS/SNTNL.lua` by hand.
+
+---
+
+## ⚙️ Customizing
+
+All settings are made in **Flight Bag**, the settings tool shared by Lipo Nanny, Link Sentinel, GPS Homer and Flight Wingman (**SYS → Tools → Apps → Flight Bag**). Thresholds, sounds, vibration and display options are set there; after **Save** they apply within a few seconds, no restart needed. Every page and row is described in the [Flight Bag guide](https://github.com/Mariator-pro/edgetx-flight-wingman/blob/main/docs/flightbag.md).
 
 ---
 
