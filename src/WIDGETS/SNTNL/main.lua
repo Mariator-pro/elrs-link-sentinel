@@ -193,16 +193,30 @@ local function vcenter(ry, rh, flags)
 end
 
 -- Muted label followed by its value -- shared by the info rows and captions.
-local function drawKV(x, y, label, value)
+local function drawKV(x, y, label, value, col)
   dtext(x, y, label, COLORS.muted, SMLSIZE)
-  dtext(x + textW(label, SMLSIZE), y, value, COLORS.fg, SMLSIZE)
+  dtext(x + textW(label, SMLSIZE), y, value, col or COLORS.fg, SMLSIZE)
 end
 
--- Fill color for the current stage: accent -> yellow -> red.
+-- Colour of a core level (0 ok, 1 warning, 2 critical): the big value, bars
+-- and status accent, yellow or red; small values text colour, yellow or red.
+-- Levels come from the core, the widget never compares thresholds itself.
 local function stageColor(stage)
+  if stage == nil then return COLORS.fg end   -- no level: neutral
   if stage >= 2 then return CRIT_COL end
   if stage >= 1 then return WARN_COL end
   return COLORS.accent
+end
+-- A colour level from the core, guarded: a failing level function leaves only
+-- that value in its neutral colour instead of breaking the whole tile.
+local function lvl(f, ...)
+  local ok, v = pcall(f, ...)
+  if ok then return v end
+end
+local function smallColor(level)
+  if level == 2 then return CRIT_COL end
+  if level == 1 then return WARN_COL end
+  return COLORS.fg
 end
 
 -- Colour for the status word where it sits ON the stage-coloured fill: light on
@@ -241,8 +255,12 @@ local function buildDisplay(ctx, r)
     rssActive = (ant == 1) and snap.rss2 or snap.rss1,  -- dBm readout: active antenna
     linkRssi  = r.linkRssi,                              -- range bar: governing (stronger) antenna
     antNum    = (ant == 1) and 2 or 1,
+    -- both antennas only from a dual-antenna receiver (2RSS 0: single antenna)
+    rss1      = (snap.rss2 and snap.rss2 ~= 0) and snap.rss1 or nil,
+    rss2      = (snap.rss2 and snap.rss2 ~= 0) and snap.rss2 or nil,
     tpwr      = snap.tpwr,                            -- nil -> "--"
     reserve   = r.pwrReservePct,                      -- DYN: lightened end of the range bar
+    pwrTag    = r.pwrTag,                             -- "DYN" / "MAX" beside TX on the preflight page
     fm        = snap.fm ~= "" and snap.fm or nil,     -- nil or empty -> "--"
     rqly      = snap.rqly,
     modLine   = ctx.state.modLine,                    -- CRSF device-info line (nil until detected)
@@ -509,9 +527,7 @@ local LQ_BAR_H = sx(6)
 local function drawLqBar(x, y, w, rqly)
   lcd.drawFilledRectangle(x, y, w, LQ_BAR_H, COLORS.track)
   local rq    = math.min(100, math.max(0, rqly))
-  local lvl   = core.lqLevel(rq)
-  local rqCol = (lvl == 0 and COLORS.accent) or (lvl == 1 and WARN_COL) or CRIT_COL
-  lcd.drawFilledRectangle(x, y, math.floor(w * rq / 100), LQ_BAR_H, rqCol)
+  lcd.drawFilledRectangle(x, y, math.floor(w * rq / 100), LQ_BAR_H, stageColor(lvl(core.lqLevel, rq)))
 end
 
 -- Info row 1: RSS / ANT / LQ. The LQ "%" unit is dropped on a narrow zone so the
@@ -519,10 +535,10 @@ end
 -- changes. Returns the columns so the grid reuses them for row 2.
 local function drawInfoRow1(x0, W, y, d)
   local c1x, c2x, c3x, col3 = gridCols(x0, W)
-  drawKV(c1x, y, "RSS ", d.rssActive .. " dBm")
+  drawKV(c1x, y, "RSS ", d.rssActive .. " dBm", smallColor(lvl(core.rssiLevel, d.stage)))
   drawKV(c2x, y, "ANT ", tostring(d.antNum))
   local lqUnit = (textW("LQ 100 %", SMLSIZE) <= col3) and " %" or ""
-  drawKV(c3x, y, "LQ ", d.rqly .. lqUnit)
+  drawKV(c3x, y, "LQ ", d.rqly .. lqUnit, smallColor(lvl(core.lqLevel, math.min(100, math.max(0, d.rqly)))))
   return c1x, c2x, c3x, col3
 end
 
@@ -543,26 +559,56 @@ end
 -- Caption on the percent baseline: "MODE <rfmode>" right-aligned (priority), the
 -- label after the percent degrading RANGELIMIT -> RANGE -> dropped as the row
 -- tightens (e.g. a three-digit percent), so it never collides with MODE.
-local function drawPctCaption(x0, W, pctBottom, labelX, d)
+-- labels (optional): other long and short label, e.g. LQ on the preflight page.
+local RANGE_LABELS = { "RANGELIMIT", "RANGE" }
+local function drawPctCaption(x0, W, pctBottom, labelX, d, labels)
+  labels = labels or RANGE_LABELS
   local capY  = pctBottom - fontH(SMLSIZE)
   local modeX = (x0 + W) - (textW("MODE ", SMLSIZE) + textW(d.rfmode, SMLSIZE))
   drawKV(modeX, capY, "MODE ", d.rfmode)
   local avail = modeX - sx(4) - labelX
-  local lbl   = "RANGELIMIT"
-  if textW(lbl, SMLSIZE) > avail then lbl = "RANGE" end
+  local lbl   = labels[1]
+  if textW(lbl, SMLSIZE) > avail then lbl = labels[2] end
   if textW(lbl, SMLSIZE) > avail then lbl = nil end
   if lbl then dtext(labelX, capY, lbl, COLORS.muted, SMLSIZE) end
 end
 
 -- Percent row for MEDIUM/SMALL: "value %" one size, caption on its baseline.
--- Returns the y just below the percent -- the top of the bar slot.
-local function drawPctRow(x0, W, top, maxH, d, sc)
-  local pctTxt  = ((d.range == nil) and "--" or tostring(math.floor(d.range + 0.5))) .. " %"
+-- Returns the y just below the percent -- the top of the bar slot. num and
+-- labels (optional) replace the range % and its caption (LQ on the preflight page).
+local function drawPctRow(x0, W, top, maxH, d, sc, num, labels)
+  num = num or ((d.range == nil) and "--" or tostring(math.floor(d.range + 0.5)))
+  local pctTxt  = num .. " %"
   local numFlag = fitFont("100 %", W * 0.5, maxH, MIDSIZE)
   dtext(x0, top, pctTxt, sc, numFlag)
   local pctBottom = top + fontH(numFlag)
-  drawPctCaption(x0, W, pctBottom, x0 + textW(pctTxt, numFlag) + sx(6), d)
+  drawPctCaption(x0, W, pctBottom, x0 + textW(pctTxt, numFlag) + sx(6), d, labels)
   return pctBottom
+end
+
+-- FULL tier geometry below the header (top to bottom): range block height, the
+-- height of each of the 2 info rows (at least one line, so they never crowd up
+-- into the bar) and the bar height. Bar takes ~42% of the block, capped so the
+-- band above always fits a MIDSIZE number. The preflight page uses the same rows.
+local function fullGeometry(top, bottom)
+  local smlH     = fontH(SMLSIZE)
+  local rest     = bottom - top
+  local hInfoRow = math.max(math.floor(rest * 0.20), smlH)
+  local hRange   = rest - 2 * hInfoRow - sx(3)
+  local barH     = math.max(sx(10), math.min(math.floor(hRange * 0.42), hRange - fontH(MIDSIZE) - sx(3)))
+  return hRange, hInfoRow, barH
+end
+
+-- Big number with the smaller % (FULL), coloured, caption on its baseline.
+local function drawBigPct(x0, W, top, bandH, num, col, d, labels)
+  local numFlag  = fitFont("100", W * 0.5, bandH, MIDSIZE)
+  local unitFlag = SMALLER[numFlag]
+  local nW, nH   = textW(num, numFlag), fontH(numFlag)
+  local uGap     = sx(3)   -- space between value and unit
+  -- anchored to the TOP of the band so the gap to the header stays constant
+  dtext(x0, top, num, col, numFlag)
+  dtext(x0 + nW + uGap, top + nH - fontH(unitFlag), "%", col, unitFlag)
+  drawPctCaption(x0, W, top + nH, x0 + nW + uGap + textW("%", unitFlag) + sx(6), d, labels)
 end
 
 -- ---------------------------------------------------------------------------
@@ -575,46 +621,19 @@ local function drawMainFull(W, H, x0, y0, d)
   local sc   = stageColor(d.stage)
   local hdrH = drawHeader(x0, y0, headerLabel(d))
 
-  -- Below the header: range block, a gap, then 2 info rows. Each row is at least one
-  -- line tall so the rows never crowd up into the bar on a short zone.
-  local top      = y0 + hdrH + sx(1)
-  local rest     = (y0 + H) - top
-  local smlH     = fontH(SMLSIZE)
-  local infoGap  = sx(3)
-  local hInfoRow = math.max(math.floor(rest * 0.20), smlH)
-  local hInfo    = hInfoRow * 2
-  local hRange   = rest - hInfo - infoGap
-
-  -- ===== RANGE BLOCK =====
-  -- Bar takes ~42% of the block, capped so the band above always fits a MIDSIZE number
-  -- (the % then reads at value size instead of dropping a font step on a tight zone).
-  local barH    = math.max(sx(10),
-                           math.min(math.floor(hRange * 0.42), hRange - fontH(MIDSIZE) - sx(3)))
-  local barY    = top + hRange - barH
-  local bandBot = barY - sx(1)
-  local bandH   = bandBot - top
-
-  -- Big percent, LEFT, value + smaller unit ("100" reference: the % is drawn
-  -- separately here). d.range is nil for an unknown mode -> show "--" and a
-  -- full bar in the warning colour.
-  local pctTxt   = (d.range == nil) and "--" or tostring(math.floor(d.range + 0.5))
-  local numFlag  = fitFont("100", W * 0.5, bandH, MIDSIZE)
-  local unitFlag = SMALLER[numFlag]
-  local nW, nH   = textW(pctTxt, numFlag), fontH(numFlag)
-  local uW, uH   = textW("%", unitFlag), fontH(unitFlag)
-  local uGap     = sx(3)   -- space between value and unit
-  -- Percent anchored to the TOP of the band so the gap to the header stays constant
-  -- regardless of zone height; spare space sits between the percent row and the bar.
-  local pctBottom = top + nH
-  dtext(x0, top, pctTxt, sc, numFlag)   -- colored by stage, like the bar fill
-  dtext(x0 + nW + uGap, pctBottom - uH, "%", sc, unitFlag)
-  drawPctCaption(x0, W, pctBottom, x0 + nW + uGap + uW + sx(6), d)
+  -- Below the header: range block (big % + bar), a gap, then 2 info rows.
+  local top = y0 + hdrH + sx(1)
+  local hRange, hInfoRow, barH = fullGeometry(top, y0 + H)
+  local barY = top + hRange - barH
+  -- d.range is nil for an unknown mode -> "--" and a full bar in the warning colour
+  local pctTxt = (d.range == nil) and "--" or tostring(math.floor(d.range + 0.5))
+  drawBigPct(x0, W, top, barY - sx(1) - top, pctTxt, sc, d)
 
   -- fill bar: length = range %, color = stage; status word two-tone inside it
   drawRangeBar(x0, barY, W, barH, d, sc)
 
   -- ===== INFO GRID (2 rows x 3 cols) =====
-  local gy  = top + hRange + infoGap
+  local gy  = top + hRange + sx(3)
   local r1y = vcenter(gy, hInfoRow, SMLSIZE)
   local r2y = vcenter(gy + hInfoRow, hInfoRow, SMLSIZE)
   local mbY = (gy + hInfoRow) + math.floor((hInfoRow - LQ_BAR_H) / 2)
@@ -632,7 +651,7 @@ local function drawMainMedium(W, H, x0, y0, d)
   -- lines 3+4 = info rows. On a short zone the pitch is floored so the last row sits at
   -- the bottom pad instead of leaving a larger gap.
   local span    = H - smlH
-  local minSpan = 4 * (smlH - sx(4))
+  local minSpan = 4 * (smlH - sx(5))   -- the pitch mainFitsMedium allows
   if span < minSpan then span = minSpan end
   local function rowY(i) return y0 + math.floor(i * span / 4 + 0.5) end
   local top   = rowY(1)
@@ -760,19 +779,17 @@ local function secsLeft(since, total)
   return math.max(0, math.ceil((total - (getTime() * 10 - since)) / 1000))
 end
 
--- Countdown at the bottom right: text left of a bar that runs empty. The text
--- shrinks to the seconds when the row is too narrow.
-local function drawCountdown(x0, W, y, secs, total, label)
+-- Countdown at the bottom right: the seconds left of a bar that runs empty.
+local function drawCountdown(x0, W, y, secs, total)
   local smlH = fontH(SMLSIZE)
   local barH = math.max(3, sx(6))
-  local barW = math.max(sx(30), math.floor(W * 0.35))
+  local barW = math.max(sx(30), math.floor(W * 0.26))
   local bx   = x0 + W - barW
   local by   = y + math.floor((smlH - barH) / 2)
   lcd.drawFilledRectangle(bx, by, barW, barH, COLORS.track)
   local fw = math.floor(barW * math.max(0, math.min(1, secs / total)))
   if fw > 0 then lcd.drawFilledRectangle(bx, by, fw, barH, COLORS.muted) end
-  local txt = string.format("%s in %d s", label, secs)
-  if textW(txt, SMLSIZE) > bx - sx(6) - x0 then txt = string.format("%d s", secs) end
+  local txt = string.format("%d s", secs)
   dtext(bx - sx(6) - textW(txt, SMLSIZE), y, txt, COLORS.muted, SMLSIZE)
 end
 
@@ -784,6 +801,9 @@ local function drawStatusLine(x, y, st)
   lcd.drawFilledCircle(x + r, y + math.floor(smlH / 2), r, col)
   dtext(x + 2 * r + sx(4), y, st.text, col, SMLSIZE)
   return 2 * r + sx(4) + textW(st.text, SMLSIZE)
+end
+local function statusLineW(st)
+  return 2 * math.max(2, sx(4)) + sx(4) + textW(st.text, SMLSIZE)
 end
 
 -- Muted label left, value right-aligned at the row's end.
@@ -799,90 +819,101 @@ local function drawLR(x0, W, y, label, value, col)
   dtext(vx, y, value, col or COLORS.fg, SMLSIZE)
 end
 
--- Preflight page, laid out like Lipo Nanny's: LQ big (same font box as its
--- per-cell voltage) with the LQ caption beside it and MODE right, then RSSI and TX
--- power, the link status and the countdown to the flight page while the check
--- is met. Status and countdown rows are fixed, the countdown row stays empty
--- while it does not run, so nothing moves. Smaller zones keep LQ, RSSI/TX,
--- status and countdown as far as they fit (two rows: LQ and status), the
--- shortest only the LQ.
+-- Preflight page in the main tile's rows: LQ (quality colour) with the LQ
+-- caption and MODE where the main tile has the range %, an LQ bar with the red
+-- mark at the stage 2 LQ limit, then RSSI / TX and the link status with the
+-- countdown to the flight page (seconds only) where the main tile has its info
+-- grid. Small zones drop RSSI / TX first, then the bar.
+local LQ_LABELS = { "LQ", "LQ" }
 local function drawPre(W, H, x0, y0, d, state)
   local smlH  = fontH(SMLSIZE)
   local rq    = math.min(100, math.max(0, d.rqly or 0))
-  local lqCol = stageColor(core.lqLevel(rq))
-  local lqTxt = tostring(rq) .. " %"
+  local lqCol = stageColor(lvl(core.lqLevel, rq))
+  local num   = tostring(rq)
   local st    = core.preflight(d.stage, d.sensLimit)
   local secs  = state.readySince and secsLeft(state.readySince, core.PRE_HOLD_T)
-  -- rows below the header at the compressed pitch, as on Lipo Nanny's preflight page
-  local nRows = math.floor((H - smlH) / (smlH - sx(4)))
-  if nRows < 1 then
-    local f = fitFont(lqTxt, W, H)
-    dtext(x0, y0 + math.floor((H - fontH(f)) / 2), lqTxt, lqCol, f)
-    return
+  local function statusRow(y)
+    drawStatusLine(x0, y, st)
+    if secs then drawCountdown(x0, W, y, secs, core.PRE_HOLD_T / 1000) end
   end
-  drawHeader(x0, y0, headerLabel(d))
-  local bottomY = y0 + H - smlH
-  local half    = math.floor(W / 2)
-  local function countdown(y)
-    if secs then drawCountdown(x0, W, y, secs, core.PRE_HOLD_T / 1000, "Flight page") end
-  end
+  -- RSSI of both antennas (the inactive one grey) when they fit, TX right-aligned
+  -- like MODE with the DYN / MAX tag while RSSI keeps its room
   local function infoRow(y)
-    drawKV(x0, y, "RSSI ", d.linkRssi and (d.linkRssi .. " dBm") or "--")
-    local tx = d.tpwr and (d.tpwr .. " mW") or "--"
-    drawKV(x0 + W - textW("TX ", SMLSIZE) - textW(tx, SMLSIZE), y, "TX ", tx)   -- right-aligned like MODE
-  end
-
-  if not mainFitsFull(W, H) then
-    local k    = (mainFitsMedium(W, H) and nRows >= 4) and 4 or math.min(3, nRows)
-    local rowY = rowSpread(H, y0, k)
-    local top  = rowY(1)
-    local numF = fitFont("100 %", W * 0.5, (k >= 2 and rowY(2) or y0 + H) - sx(2) - top, MIDSIZE)
-    dtext(x0, top, lqTxt, lqCol, numF)
-    local pctBottom = top + fontH(numF)
-    local modeX = (x0 + W) - (textW("MODE ", SMLSIZE) + textW(d.rfmode, SMLSIZE))
-    drawKV(modeX, pctBottom - smlH, "MODE ", d.rfmode)
-    local lqX = x0 + textW(lqTxt, numF) + sx(6)
-    if lqX + textW("LQ", SMLSIZE) <= modeX - sx(4) then dtext(lqX, pctBottom - smlH, "LQ", COLORS.muted, SMLSIZE) end
-    if k == 4 then
-      infoRow(rowY(2))
-      drawStatusLine(x0, rowY(3), st)
-      countdown(rowY(4))
-    else
-      -- no row of its own: the countdown joins the status line, the info row keeps its place
-      if k >= 3 then infoRow(rowY(2)) end
-      if k >= 2 then
-        local cx = x0 + drawStatusLine(x0, rowY(k), st) + sx(8)
-        if secs then drawCountdown(cx, x0 + W - cx, rowY(k), secs, core.PRE_HOLD_T / 1000, "Flight page") end
+    local tx  = d.tpwr and (d.tpwr .. " mW") or "--"
+    local lbl = d.pwrTag and ("TX (" .. d.pwrTag .. ") ") or "TX "
+    if textW("RSSI -000 dBm" .. lbl .. tx, SMLSIZE) + sx(6) > W then lbl = "TX " end
+    local txX = x0 + W - textW(lbl .. tx, SMLSIZE)
+    drawKV(txX, y, lbl, tx)
+    local col = smallColor(lvl(core.rssiLevel, d.stage))
+    local x   = x0 + textW("RSSI ", SMLSIZE)
+    dtext(x0, y, "RSSI ", COLORS.muted, SMLSIZE)
+    local dual = d.rss1 and d.rss2 and textW("RSSI -000 / -000 dBm", SMLSIZE) <= txX - sx(6) - x0
+    if dual then   -- the inactive antenna grey, the separator in text colour as on Flight Wingman
+      for _, p in ipairs({ { tostring(d.rss1), 1 }, { " / " }, { d.rss2 .. " dBm", 2 } }) do
+        local c = not p[2] and COLORS.fg or (d.antNum ~= p[2]) and COLORS.muted or col
+        dtext(x, y, p[1], c, SMLSIZE)
+        x = x + textW(p[1], SMLSIZE)
       end
+    else
+      dtext(x, y, d.linkRssi and (d.linkRssi .. " dBm") or "--", col, SMLSIZE)
     end
-    return
+  end
+  local function lqBar(y, h)
+    lcd.drawFilledRectangle(x0, y, W, h, COLORS.track)
+    local fw = math.floor(W * rq / 100)
+    if fw > 0 then lcd.drawFilledRectangle(x0, y, fw, h, lqCol) end
+    local tickW = math.max(sx(2), 2)
+    local crit  = core.PARAMS.RQLY_THRESHOLD
+    lcd.drawFilledRectangle(x0 + math.floor(W * crit / 100) - math.floor(tickW / 2), y - sx(1), tickW, h + sx(2), CRIT_COL)
   end
 
-  -- FULL: the spare height is shared out evenly between the blocks, as on
-  -- Lipo Nanny's preflight page.
-  local top   = y0 + smlH + sx(1)
-  local bigF  = fitFont("0.00V", math.floor(W * 0.5), math.floor((bottomY - top) * 0.4))
-  local unitF = SMALLER[bigF]
-  local bigH  = fontH(bigF)
-  local num   = tostring(rq)
-  dtext(x0, top, num, lqCol, bigF)
-  local capX  = x0 + textW(num, bigF) + sx(3)
-  dtext(capX, top + bigH - fontH(unitF), "%", lqCol, unitF)
-  capX = capX + textW("%", unitF) + sx(6)
-  -- MODE beside its value on the value's line
-  local mVal  = d.rfmode
-  local modeX = x0 + W - (textW("MODE", SMLSIZE) + sx(4) + textW(mVal, 0))
-  if capX + textW("LQ", SMLSIZE) <= modeX - sx(4) then
-    dtext(capX, top + bigH - smlH, "LQ", COLORS.muted, SMLSIZE)
+  if mainFitsFull(W, H) then   -- as drawMainFull
+    local top = y0 + drawHeader(x0, y0, headerLabel(d)) + sx(1)
+    local hRange, hInfoRow, barH = fullGeometry(top, y0 + H)
+    local barY = top + hRange - barH
+    drawBigPct(x0, W, top, barY - sx(1) - top, num, lqCol, d, LQ_LABELS)
+    lqBar(barY, barH)
+    local gy = top + hRange + sx(3)
+    infoRow(vcenter(gy, hInfoRow, SMLSIZE))
+    statusRow(vcenter(gy + hInfoRow, hInfoRow, SMLSIZE))
+  elseif mainFitsMedium(W, H) then   -- as drawMainMedium
+    drawHeader(x0, y0, headerLabel(d))
+    local span    = H - smlH
+    local minSpan = 4 * (smlH - sx(5))   -- the pitch mainFitsMedium allows
+    if span < minSpan then span = minSpan end
+    local function rowY(i) return y0 + math.floor(i * span / 4 + 0.5) end
+    local top, row1Y = rowY(1), rowY(3)
+    infoRow(row1Y)
+    statusRow(rowY(4))
+    local barTop = drawPctRow(x0, W, top, math.floor((row1Y - sx(2) - top) * 0.5), d, lqCol, num, LQ_LABELS)
+    lqBar(barTop, math.max(sx(8), (row1Y - sx(1)) - barTop))
+  else   -- as drawMainSmall: header, LQ, bar and status as far as they fit
+    local gap   = sx(1)
+    local nRows = math.floor((H + gap) / (smlH + gap))
+    if nRows <= 1 then
+      local f = fitFont(num .. " %", W, H)
+      dtext(x0, y0 + math.floor((H - fontH(f)) / 2), num .. " %", lqCol, f)
+      return
+    end
+    drawHeader(x0, y0, headerLabel(d))
+    if nRows == 2 then   -- no status row: the status right-aligned on the LQ row instead of MODE
+      local top = y0 + smlH + gap
+      local f   = fitFont("100 %", W * 0.5, H - smlH - gap, MIDSIZE)
+      dtext(x0, top, num .. " %", lqCol, f)
+      local base = top + fontH(f) - smlH
+      local stX  = x0 + W - statusLineW(st)
+      drawStatusLine(stX, base, st)
+      local capX = x0 + textW(num .. " %", f) + sx(6)
+      if capX + textW("LQ", SMLSIZE) <= stX - sx(6) then dtext(capX, base, "LQ", COLORS.muted, SMLSIZE) end
+      return
+    end
+    local divisor = nRows >= 4 and 3 or 2
+    local function rowY(i) return y0 + math.floor(i * (H - smlH) / divisor + 0.5) end
+    local stY = rowY(divisor)
+    statusRow(stY)
+    local barTop = drawPctRow(x0, W, rowY(1), math.floor((stY - sx(2) - rowY(1)) * 0.5), d, lqCol, num, LQ_LABELS)
+    if divisor == 3 then lqBar(barTop, math.max(sx(8), (stY - sx(1)) - barTop)) end
   end
-  dtext(x0 + W - textW(mVal, 0), top + bigH - fontH(0), mVal, COLORS.fg, 0)
-  dtext(modeX, top + bigH - smlH, "MODE", COLORS.muted, SMLSIZE)
-  local fixed = bigH + 2 * smlH
-  local gap   = math.max(0, math.floor((bottomY - top - fixed) / 3))
-  local infoY = top + bigH + gap
-  infoRow(infoY)
-  drawStatusLine(x0, infoY + smlH + gap, st)
-  countdown(bottomY)
 end
 
 -- End page: the flight's lowest LQ, highest RANGELIMIT (coloured by the
@@ -893,22 +924,22 @@ local function drawEnded(W, H, x0, y0, d, r, state, mode)
   local left  = secsLeft(state.endedAt, core.ENDED_HOLD_T)
   local function pct(v) return v and (string.format("%d", math.floor(v + 0.5)) .. " %") or "--" end
   local rows = {
-    { { "LOW LINK QUALITY", "LOW LQ" }, pct(r.minRqly), r.minRqly and stageColor(core.lqLevel(r.minRqly)) },
-    { "MAX RANGELIMIT", pct(r.maxRangePct), r.maxRangePct and stageColor(r.maxStage or 0) },
+    { { "LOW LINK QUALITY", "LOW LQ" }, pct(r.minRqly), r.minRqly and smallColor(lvl(core.lqLevel, r.minRqly)) },
+    { "MAX RANGELIMIT", pct(r.maxRangePct), r.maxRangePct and smallColor(r.maxStage or 0) },
     { { "MAX TX POWER", "MAX TX PWR" }, r.maxTpwr and (r.maxTpwr .. " mW") or "--" },
     { "RF MODE", mode or "--" },
   }
   local nRows = math.floor((H - smlH) / (smlH - sx(4)))   -- compressed lines below the header
-  if nRows < 2 then
-    drawLR(x0, W, y0, rows[1][1], rows[1][2], rows[1][3])
-    if H >= 2 * smlH then drawCountdown(x0, W, y0 + H - smlH, left, core.ENDED_HOLD_T / 1000, "Wait page") end
+  if nRows < 2 then   -- header (when it fits) and the lowest LQ, no countdown
+    if H >= 2 * smlH - sx(4) then drawHeader(x0, y0, headerLabel(d)) end
+    drawLR(x0, W, y0 + H - smlH, rows[1][1], rows[1][2], rows[1][3])
     return
   end
   drawHeader(x0, y0, headerLabel(d))
   local k    = math.min(#rows, nRows - 1)
   local rowY = rowSpread(H, y0, k + 1)
   for i = 1, k do drawLR(x0, W, rowY(i), rows[i][1], rows[i][2], rows[i][3]) end
-  drawCountdown(x0, W, rowY(k + 1), left, core.ENDED_HOLD_T / 1000, "Wait page")
+  drawCountdown(x0, W, rowY(k + 1), left, core.ENDED_HOLD_T / 1000)
 end
 
 -- ---------------------------------------------------------------------------

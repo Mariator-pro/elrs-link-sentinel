@@ -75,6 +75,13 @@ function M.lqLevel(rqly)
   return (rqly >= M.PARAMS.RQLY_THRESHOLD) and 1 or 2
 end
 
+-- RSSI colour level for displays: 1 (yellow) while stage 1 is active (also in
+-- stage 2), else 0; no red, stage 2 hangs on LQ. nil without a stage.
+function M.rssiLevel(stage)
+  if not stage then return nil end
+  return (stage >= 1) and 1 or 0
+end
+
 -- playHaptic pulse length per strength tier, and pulses per warning: Stage 2
 -- (critical) fires twice to feel clearly stronger than Stage 1.
 M.HAPTIC_DUR    = { [1] = 15, [2] = 30, [3] = 50 }
