@@ -57,7 +57,7 @@ local PAGES = {
   { id = "batteries", label = "Batteries",    file = "batteries.lua", needs = { LIPONY = true }, only = true },
   { id = "models",    label = "Models",       file = "models.lua",    needs = { LIPONY = true, WINGMAN = true }, only = true },
   { id = "flights",   label = "Last flights", file = "flights.lua",   needs = { GPSHOMER = true }, only = true },
-  { id = "display",   label = "Display",      file = "settings.lua",  needs = { WINGMAN = true } },
+  { id = "display",   label = "Display",      file = "settings.lua",  needs = { WINGMAN = true, LIPONY = true } },
 }
 
 local apps  = {}   -- { folder, version, api, configPath, ok, noConfig, icon, ... }
