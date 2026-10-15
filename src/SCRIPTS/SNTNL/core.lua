@@ -749,6 +749,7 @@ function M.evaluate(state, snap, now)
     result.minRqly, result.minMarginDb = state.minRqly, state.minMarginDb
     result.maxRangePct, result.maxTpwr = state.maxRangePct, state.maxTpwr
     result.maxStage = state.maxStage
+    result.modeName = state.modeName   -- the flight's last mode, for the end page
     return result
   end
 
@@ -830,6 +831,7 @@ function M.evaluate(state, snap, now)
   result.linkRssi  = linkRssi               -- governing RSS (stronger antenna) -> range bar
   result.refRssi   = M.rssiAtRef(linkRssi, snap.tpwr)   -- linkRssi at REF_MW (nil without TPWR)
   result.modeName  = M.MODE_NAMES[rfmd]     -- nil if unknown (widget falls back to number)
+  state.modeName   = result.modeName
   result.armed     = armed                  -- false while unknown
   result.rangePct    = rangePct               -- RANGELIMIT now (nil for an unknown mode)
   result.minRqly     = state.minRqly
@@ -966,9 +968,34 @@ local function wakeDisplay()
   if lcd and lcd.resetBacklightTimeout then lcd.resetBacklightTimeout() end
 end
 
+-- One-shot events of a result: a held result carries this cycle's, never the
+-- old ones again (holdLive).
+local ONE_SHOT = { playStage1 = true, playStage2 = true, playCfgErr = true, playLost = true,
+                   playConn = true, playRec = true }
+
+-- Telemetry gap shorter than LINK_LOSS_T (phase still PRE or FLIGHT): the last
+-- online result stands (with its snapshot), so the preflight and flight page
+-- keep their values and colours until the end page; held = true marks it. Phase,
+-- linkUp (telemetry arriving right now: the heartbeat) and this cycle's one-shot
+-- events stay current.
+local function holdLive(state, result, up)
+  result.linkUp = up
+  if up then state.live = result; return result end
+  local live = state.live
+  if not live or not (result.phase == "PRE" or result.phase == "FLIGHT") then
+    state.live = nil
+    return result
+  end
+  local held = {}
+  for k, v in pairs(live) do held[k] = v end
+  for k in pairs(ONE_SHOT) do held[k] = result[k] end
+  held.phase, held.held, held.linkUp = result.phase, true, false
+  return held
+end
+
 -- ---------------------------------------------------------------------------
--- One full cycle: read -> evaluate -> play. Returns the result table plus the
--- raw snapshot for the widget. The function script ignores the return value;
+-- One full cycle: read -> evaluate -> play -> hold (holdLive). Returns the result
+-- table plus the raw snapshot for the widget. The function script ignores the return value;
 -- the widget derives all display values from it.
 -- ---------------------------------------------------------------------------
 function M.update(state, now)
@@ -1003,7 +1030,7 @@ function M.update(state, now)
     playFile(M.SOUNDS.rec)
   end
 
-  return result
+  return holdLive(state, result, snap.rssiValid)
 end
 
 return M

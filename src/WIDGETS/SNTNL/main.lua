@@ -956,7 +956,7 @@ local function create(zone, opts)
   local ctx = {
     zone = zone, options = opts,
     lastTick = 0, errorStreak = 0, fatalError = false,
-    rangeSmoothed = nil, result = nil, lastRunning = nil,
+    rangeSmoothed = nil, result = nil,
   }
   if core then ctx.state = core.newState() end
   return ctx
@@ -978,9 +978,6 @@ local function tick(ctx)
   local ok, res = pcall(core.update, ctx.state)
   if ok then
     ctx.result      = res
-    if res.status == "running" then
-      ctx.lastRunning = res                                      -- held during a brief dropout
-    end
     ctx.errorStreak = 0
   else
     ctx.errorStreak = ctx.errorStreak + 1
@@ -1042,21 +1039,16 @@ local function refresh(ctx, event, touchState)
 
     -- After a flight: the end page until the hold runs out (then NO LINK).
     if r.phase == "ENDED" then
-      drawEnded(W, H, x0, y0, { modLine = ctx.state.modLine }, r, ctx.state,
-                ctx.lastRunning and ctx.lastRunning.modeName)
+      drawEnded(W, H, x0, y0, { modLine = ctx.state.modLine }, r, ctx.state, r.modeName)
       return
     end
 
-    -- NO LINK is debounced by core: hold the last good running tile exactly as
-    -- long as core holds the warning, then fall through to NO LINK.
+    -- A short dropout arrives as the held running result (core), so no_link
+    -- means the link is really gone.
     if r.status == "no_link" then
-      if ctx.lastRunning and not r.linkLost then
-        r = ctx.lastRunning
-      else
-        ctx.rangeSmoothed, ctx.solidSmoothed = nil, nil   -- next connect snaps fresh
-        drawNoLink(ctx)
-        return
-      end
+      ctx.rangeSmoothed, ctx.solidSmoothed = nil, nil   -- next connect snaps fresh
+      drawNoLink(ctx)
+      return
     end
 
     -- running (live or held): derive display values, smooth the range bar, draw.
@@ -1084,8 +1076,8 @@ local function refresh(ctx, event, touchState)
 
   -- Heartbeat: blink only on the live data tile, never on an error/status tile or during
   -- a held dropout or NO LINK.
-  if ok and core and not ctx.fatalError and ctx.result and ctx.result.status == "running"
-     and not setupError(ctx.result) then
+  if ok and core and not ctx.fatalError and ctx.result and ctx.result.linkUp
+     and ctx.result.status == "running" and not setupError(ctx.result) then
     pcall(drawHeartbeat, ctx)
   end
 end
