@@ -25,20 +25,17 @@
 -- 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 -- =====================================================================
 
-local BASE     = "/SCRIPTS/FLIGHTBAG/"
-local TITLE    = "Flight Bag"
-local API_MAJOR = 1          -- core interface this tool understands: { 1, >= 0 }
-local HEAD_MAX = 2048        -- VERSION, API and CONFIG_PATH sit within this many bytes
-local FIRST    = "WINGMAN"   -- shown first in the app strip
+local BASE  = "/SCRIPTS/FLIGHTBAG/"
+local TITLE = "Flight Bag"
 
-local ui
-do
-  local chunk = loadScript(BASE .. "ui.lua")
+local function loadModule(file)
+  local chunk = loadScript(BASE .. file)
   local ok, mod = false, nil
   if chunk then ok, mod = pcall(chunk) end
-  ui = ok and type(mod) == "table" and mod or nil
+  return ok and type(mod) == "table" and mod or nil
 end
-if not ui then
+local ui, A = loadModule("ui.lua"), loadModule("apps.lua")
+if not (ui and A) then
   local function run(event)
     lcd.clear()
     lcd.drawText(10, 10, "Flight Bag files are missing.", COLOR_THEME_PRIMARY1)
@@ -49,248 +46,72 @@ if not ui then
   return { run = run }
 end
 
--- Topic pages. `apps` limits a page to these app folders (nil = every app).
-local SETTINGS_APPS = { LIPONY = true, SNTNL = true, GPSHOMER = true }
-local PAGES = {
-  { id = "warnings",  label = "Warnings",     file = "settings.lua",  needs = SETTINGS_APPS },
-  { id = "alerts",    label = "Alerts",       file = "settings.lua",  needs = SETTINGS_APPS },
-  { id = "batteries", label = "Batteries",    file = "batteries.lua", needs = { LIPONY = true }, only = true },
-  { id = "models",    label = "Models",       file = "models.lua",    needs = { LIPONY = true, WINGMAN = true }, only = true },
-  { id = "flights",   label = "Last flights", file = "flights.lua",   needs = { GPSHOMER = true }, only = true },
-  { id = "display",   label = "Display",      file = "settings.lua",  needs = { WINGMAN = true, LIPONY = true } },
-}
+-- Page file per topic page.
+local FILES = { warnings = "settings.lua", alerts = "settings.lua", batteries = "batteries.lua",
+                models = "models.lua", flights = "flights.lua", display = "settings.lua" }
 
-local apps  = {}   -- { folder, version, api, configPath, ok, noConfig, icon, ... }
-local menu  = {}   -- PAGES entries with at least one usable app
+local apps  = {}   -- see A.scan
+local menu  = {}   -- A.PAGES entries with at least one usable app
 local cursor = 1   -- menu rows, then apps, then Exit
 local page         -- open page: { draw(), handle(e) -> true to close }
 local pop          -- open app popup: { app, cursor, buttons }
 
--- ---------------------------------------------------------------------------
--- Scan
--- ---------------------------------------------------------------------------
-
-local function readHead(path)
-  local ok, f = pcall(io.open, path, "r")
-  if not ok or not f then return "" end
-  local rok, s = pcall(io.read, f, HEAD_MAX)
-  pcall(io.close, f)
-  return rok and s or ""
-end
-
-local function exists(path)
-  local ok, st = pcall(fstat, path)
-  return ok and st ~= nil
-end
-
--- A leftover /SCRIPTS/TOOLS/<NAME>.lua of an older release would list the app
--- twice in the Tools menu; it goes once the app has a manifest.
-local function removeLeftover(folder)
-  for _, ext in ipairs({ ".lua", ".luac" }) do
-    local p = "/SCRIPTS/TOOLS/" .. folder .. ext
-    if exists(p) then pcall(del, p) end
-  end
-end
-
-local function scan()
-  local list = {}
-  pcall(function()
-    for folder in dir("/SCRIPTS") do
-      local base = "/SCRIPTS/" .. folder .. "/"
-      if folder ~= "TOOLS" and exists(base .. "core.lua") then
-        local head = readHead(base .. "core.lua")
-        local a, b = string.match(head, "%.API%s*=%s*{%s*(%d+)%s*,%s*(%d+)")
-        local app = {
-          folder     = folder,
-          base       = base,
-          version    = string.match(head, '%.VERSION%s*=%s*"([^"]+)"'),
-          configPath = string.match(head, '%.CONFIG_PATH%s*=%s*"([^"]+)"'),
-          hasManifest = exists(base .. "manifest.lua"),
-        }
-        if app.hasManifest then   -- display name as text, the manifest is not run here
-          app.name = string.match(readHead(base .. "manifest.lua"), 'name%s*=%s*"([^"]+)"')
-        end
-        app.ok = app.hasManifest and tonumber(a) == API_MAJOR and tonumber(b) ~= nil
-        app.noConfig = app.ok and app.configPath ~= nil and not exists(app.configPath)
-        list[#list + 1] = app
-      end
-    end
-  end)
-  table.sort(list, function(x, y)
-    if (x.folder == FIRST) ~= (y.folder == FIRST) then return x.folder == FIRST end
-    return x.folder < y.folder
-  end)
-  for _, app in ipairs(list) do
-    if app.ok then removeLeftover(app.folder) end
-    local bmp = exists(app.base .. "icon.png") and Bitmap.open(app.base .. "icon.png")
-    if bmp and Bitmap.getSize(bmp) > 0 then app.icon = bmp end   -- size 0: missing or broken
-  end
-  return list
-end
-
-local function buildMenu()
-  menu = {}
-  for _, p in ipairs(PAGES) do
-    for _, app in ipairs(apps) do
-      if app.ok and p.needs[app.folder] then menu[#menu + 1] = p; break end
-    end
-  end
-end
-
--- ---------------------------------------------------------------------------
--- Loading an app (core, manifest, config) for a page or the popup
--- ---------------------------------------------------------------------------
-
-local function loadApp(app)
-  if app.core then return true end
-  local function load(path)
-    local chunk = loadScript(path)
-    if not chunk then return nil end
-    local ok, v = pcall(chunk)
-    return ok and v or nil
-  end
-  local core = load(app.base .. "core.lua")
-  local mk   = core and load(app.base .. "manifest.lua")
-  local ok, man = false, nil
-  if type(core) == "table" and type(mk) == "function" then ok, man = pcall(mk, core) end
-  if not ok or type(man) ~= "table" then
-    app.loadError = true
-    return false
-  end
-  app.core, app.man = core, man
-  if core.loadConfig then
-    app.cfg, app.err, app.errDetail = core.loadConfig()
-  end
-  -- Setup errors of the active model, listed in the popup; app.warn (the icon's
-  -- warning sign) outlives the unload.
-  app.setupErrs = nil
-  if type(core.setupErrors) == "function" then
-    local sok, list = pcall(core.setupErrors)
-    if sok and type(list) == "table" and #list > 0 then app.setupErrs = list end
-  end
-  app.warn = app.err ~= nil or app.setupErrs ~= nil
-  return true
-end
-
--- Drops the loaded modules so the next page starts from the files again.
-local function unloadApps()
-  for _, app in ipairs(apps) do
-    app.core, app.man, app.cfg, app.err, app.errDetail, app.loadError = nil, nil, nil, nil, nil, nil
-    app.setupErrs = nil
-    app.noConfig = app.ok and app.configPath ~= nil and not exists(app.configPath)
-  end
-  collectgarbage()
-end
-
--- Loads each app once for its warning sign (damaged settings, setup errors):
--- at start and after a page or popup closed, which may have fixed the problem.
-local function refreshWarnings()
-  for _, app in ipairs(apps) do
-    if app.ok then loadApp(app); unloadApps() end
-  end
-end
-
 local function openPage(p)
-  local chunk = loadScript(BASE .. p.file)
+  local chunk = loadScript(BASE .. FILES[p.id])
   local ok, mk = false, nil
   if chunk then ok, mk = pcall(chunk) end
   if not ok or type(mk) ~= "function" then
     ui.openAlert(p.label .. " could not be started. Copy " .. BASE .. " to the SD card again.")
     return
   end
-  local list = {}
-  for _, app in ipairs(apps) do
-    if app.ok and (not p.only or p.needs[app.folder]) and loadApp(app) then
-      list[#list + 1] = app
-    end
-  end
-  local pok, pg = pcall(mk, { ui = ui, apps = list, id = p.id, title = p.label })
-  if pok and type(pg) == "table" then page = pg else unloadApps() end
+  local pok, pg = pcall(mk, { ui = ui, lib = A, apps = A.pageApps(apps, p), id = p.id, title = p.label })
+  if pok and type(pg) == "table" then page = pg else A.unload(apps) end
 end
 
 local function closePage()
   page = nil
-  unloadApps()
-  refreshWarnings()
+  A.unload(apps)
+  A.refreshWarnings(apps)
 end
 
 -- ---------------------------------------------------------------------------
 -- App popup: About data, file list and resets
 -- ---------------------------------------------------------------------------
 
+local function closePopup() pop = nil; A.unload(apps); A.refreshWarnings(apps) end
+
 local popupButtons
 
--- Runs a core function that writes a file, reports the result and refreshes
--- the popup (a created or reset file changes its buttons).
-local function runWrite(fn)
-  local ok, res = pcall(fn)
-  if ok and res then
-    ui.openAlert("Done.")
-  else
-    ui.openAlert("Save failed. Check SD card.")
-  end
-  unloadApps()
-  if pop then
-    loadApp(pop.app)
-    pop.buttons = popupButtons(pop.app)
-    pop.cursor  = math.min(pop.cursor, #pop.buttons)
-  end
+-- Runs an action's write, reports the result and refreshes the buttons.
+local function runWrite(act)
+  ui.openAlert(A.runAction(apps, pop.app, act) and "Done." or "Save failed. Check SD card.")
+  pop.buttons = popupButtons(pop.app)
+  pop.cursor  = math.min(pop.cursor, #pop.buttons)
 end
 
 popupButtons = function(app)
   local b = {}
-  if app.ok and app.man then
-    b[#b + 1] = { label = "Files", act = function() ui.openInfoRows(app.man.paths or {}) end }
-    local core = app.core
-    if app.noConfig then
-      b[#b + 1] = { label = "Create", act = function()
-        runWrite(function() return core.saveConfig(core.defaultConfig()) end) end }
-    elseif app.err then
-      b[#b + 1] = { label = "Reset", act = function()
-        ui.openDialog("Replace the damaged settings file with factory settings?", function()
-          runWrite(function() return core.saveConfig(core.defaultConfig()) end) end) end }
-    else
-      for _, r in ipairs(app.man.resets or {}) do
-        b[#b + 1] = { label = r.label, act = function()
-          ui.openDialog(r.ask, function() runWrite(r.run) end) end }
-      end
-    end
+  for _, act in ipairs(A.popupActions(app)) do
+    b[#b + 1] = { label = act.label, act = function()
+      if act.rows then ui.openInfoRows(act.rows)
+      elseif act.ask then ui.openDialog(act.ask, function() runWrite(act) end)
+      else runWrite(act) end
+    end }
   end
-  b[#b + 1] = { label = "Close", act = function() pop = nil; unloadApps(); refreshWarnings() end }
+  b[#b + 1] = { label = "Close", act = closePopup }
   return b
 end
 
 local function openPopup(app)
-  if app.ok then loadApp(app) end
+  if app.ok then A.load(app) end
   pop = { app = app }
   pop.buttons = popupButtons(app)
   pop.cursor  = #pop.buttons
 end
 
--- Popup text: { text, warn } per line; warnings in the theme's warning colour.
-local function popupLines(app)
-  local lines = {}
-  local function add(t, warn) lines[#lines + 1] = { t, warn } end
-  local name = app.man and app.man.name or app.folder
-  add(name .. (app.version and ("  v" .. app.version) or ""))
-  add("(c) Mariator-pro   GPL-2.0")
-  if app.man and app.man.url then add(app.man.url) end
-  if not app.ok or app.loadError then
-    add("Update needed: this version does not work", true)
-    add("with this Flight Bag.", true)
-  elseif app.noConfig then
-    add("No settings file yet.", true)
-  elseif app.err then
-    add("Settings file damaged (" .. tostring(app.err) .. ").", true)
-  elseif app.setupErrs then
-    for _, e in ipairs(app.setupErrs) do add(e, true) end
-  end
-  return lines
-end
-
 local function drawPopup()
   local app, LINE, PAD = pop.app, ui.LINE, ui.PAD
-  local lines = popupLines(app)
+  local lines = A.popupLines(app)
   local w = LCD_W - 4 * PAD
   local _, th = lcd.sizeText("Mg")
   local btnH = th + 4
@@ -329,7 +150,7 @@ local function handlePopup(e)
   if ui.isNext(e) then pop.cursor = pop.cursor % n + 1
   elseif ui.isPrev(e) then pop.cursor = (pop.cursor - 2) % n + 1
   elseif ui.isEnter(e) then pop.buttons[pop.cursor].act()
-  elseif ui.isExit(e) then pop = nil; unloadApps(); refreshWarnings() end
+  elseif ui.isExit(e) then closePopup() end
 end
 
 -- ---------------------------------------------------------------------------
@@ -422,7 +243,7 @@ local function drawStrip()
       lcd.drawText(ix + math.floor((s - lw) / 2), iy + math.floor((s - lh) / 2), letter,
                    COLOR_THEME_PRIMARY2 + BOLD)
     end
-    if not app.ok or app.noConfig or app.warn then drawMarker(ix + s - 2, iy + 2, s) end
+    if A.needsSign(app) then drawMarker(ix + s - 2, iy + 2, s) end
     local ty = iy + s + FOCUS_PAD
     for _, t in ipairs({ app.name or app.folder, app.version and ("v" .. app.version) or "?" }) do
       -- Too wide for the cell: cut and mark with "..".
@@ -483,9 +304,9 @@ end
 -- ---------------------------------------------------------------------------
 
 local function init()
-  apps = scan()
-  refreshWarnings()
-  buildMenu()
+  apps = A.scan()
+  A.refreshWarnings(apps)
+  menu = A.menu(apps)
   cursor = 1
 end
 

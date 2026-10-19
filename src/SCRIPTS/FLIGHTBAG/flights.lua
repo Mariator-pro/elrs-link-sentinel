@@ -14,12 +14,8 @@ local QR_QUIET = 4   -- modules of light margin the scanner needs on each side
 
 return function(ctx)
   local ui = ctx.ui
-  local core
-  for _, app in ipairs(ctx.apps) do
-    if app.folder == "GPSHOMER" then core = app.core end
-  end
-
-  local flights = core and core.readFlights() or {}
+  local M = loadScript("/SCRIPTS/FLIGHTBAG/flights_model.lua")()(ctx)
+  local flights = M.flights
   local idx = 1
   local qr            -- encoder module, false when it failed to load
   local qrUrl, qrRuns -- runs of the current symbol (rebuilding per frame is far too slow)
@@ -35,7 +31,7 @@ return function(ctx)
   end
 
   local function runsFor(entry)
-    local url = core.mapUrl(entry.lat, entry.lon)
+    local url = M.url(entry)
     if qrUrl ~= url then
       qrUrl = url
       local mod  = qrModule()
@@ -82,9 +78,7 @@ return function(ctx)
     local qrX   = LCD_W - PAD - box
     drawCode(entry, qrX, ui.bodyY(1), box)
 
-    local stamp = entry.date
-    if entry.time ~= "" then stamp = (stamp == "" and entry.time) or (stamp .. "  " .. entry.time) end
-    if stamp == "" then stamp = "no clock" end
+    local stamp = M.stamp(entry)
     local counter = idx .. " / " .. n
     lcd.drawText(COL1, ui.bodyY(1), counter, COLOR_THEME_PRIMARY1 + BOLD)
     if n > 1 then
@@ -98,9 +92,9 @@ return function(ctx)
     -- LAT / LON labels, the values on one edge
     local vx = COL1 + math.max(lcd.sizeText("LAT "), lcd.sizeText("LON "))
     lcd.drawText(COL1, ui.bodyY(4), "LAT ", COLOR_THEME_DISABLED)
-    lcd.drawText(vx, ui.bodyY(4), core.formatCoord(entry.lat), COLOR_THEME_PRIMARY1)
+    lcd.drawText(vx, ui.bodyY(4), M.coord(entry.lat), COLOR_THEME_PRIMARY1)
     lcd.drawText(COL1, ui.bodyY(5), "LON ", COLOR_THEME_DISABLED)
-    lcd.drawText(vx, ui.bodyY(5), core.formatCoord(entry.lon), COLOR_THEME_PRIMARY1)
+    lcd.drawText(vx, ui.bodyY(5), M.coord(entry.lon), COLOR_THEME_PRIMARY1)
     ui.drawButtonBar({ "Back" }, 1, 1)
   end
 

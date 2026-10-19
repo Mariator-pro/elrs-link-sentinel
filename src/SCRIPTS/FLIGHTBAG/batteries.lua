@@ -2,16 +2,13 @@
 -- batteries.lua  --  Flight Bag page "Batteries" (Lipo Nanny)
 -- =====================================================================
 -- SD card path: /SCRIPTS/FLIGHTBAG/batteries.lua
--- Battery profiles: list, profile editor (name and manufacturer through a
--- character ring), packs (cycles, wear, purchase date, add / archive) and the
--- read-only per-pack statistics. Saves through the Lipo Nanny core.
+-- Drawn view of batteries_model.lua: list, profile editor (name and
+-- manufacturer through a character ring), packs (cycles, wear, purchase date,
+-- add / archive) and the read-only per-pack statistics.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
 -- =====================================================================
-
-local TEXT_MAX = { mfr = 10, name = 30 }   -- manufacturer / profile-name char caps
-local MAX_PACKS = 20
 
 -- Character groups for the ring picker; the wheel cycles within one group, MDL
 -- jumps to the next group's `first`. Each group ends in a space.
@@ -28,31 +25,10 @@ local function groupOfChar(ch)
   return 1
 end
 
--- Optional purchase date ("YYYY-MM", absent = unset), edited as a month count so
--- the wheel rolls month -> year.
-local Buy = {
-  MIN = 2010 * 12,
-  MAX = 2099 * 12 + 11,
-  toMonths = function(s)
-    local y, m = string.match(s or "", "(%d+)-(%d+)")
-    y, m = tonumber(y), tonumber(m)
-    return (y and m) and (y * 12 + (m - 1)) or nil
-  end,
-  fromMonths = function(n) return string.format("%04d-%02d", math.floor(n / 12), n % 12 + 1) end,
-  today = function()
-    local dt = getDateTime and getDateTime()
-    return (dt and dt.year) and string.format("%04d-%02d", dt.year, dt.mon) or "2024-01"
-  end,
-}
-
 return function(ctx)
   local ui = ctx.ui
-  local app
-  for _, a in ipairs(ctx.apps) do if a.folder == "LIPONY" then app = a end end
-  local core = app and app.core
-  local cfg  = app and app.cfg
-  local LIMITS, DEFAULTS = core and core.LIMITS, core and core.DEFAULTS
-  local CHEM_NAMES = core and core.CHEM_NAMES
+  local M = loadScript("/SCRIPTS/FLIGHTBAG/batteries_model.lua")()(ctx)
+  local TEXT_MAX, Buy = M.TEXT_MAX, M.Buy
 
   local S = { screen = "list", cursor = 1 }
   local Screen, Nav = {}, {}
@@ -68,140 +44,7 @@ return function(ctx)
   end
 
   local function save(onDone)
-    ui.withRetry(function() return core.saveConfig(cfg) end, onDone)
-  end
-
-  -- ---------------------------------------------------------------------------
-  -- Profiles: helpers
-  -- ---------------------------------------------------------------------------
-
-  -- Auto-generated profile name: "<Manufacturer> <S>s <Chemistry> <mAh>mAh".
-  local function genName(p)
-    local mfr = (p.manufacturer ~= "" and (p.manufacturer .. " ")) or ""
-    return mfr .. p.cells .. "s " .. p.chemistry .. " " .. p.capacityMah .. "mAh"
-  end
-
-  -- Next "bat_NNN" id, never reused: a counter persisted in the config, floored to
-  -- one above every id still present in the library or referenced by a model.
-  local function nextBatteryId()
-    local function num(id) return tonumber(string.match(tostring(id or ""), "^bat_(%d+)$")) or 0 end
-    local n = cfg.nextBatteryId or 1
-    for _, b in ipairs(cfg.batteries) do n = math.max(n, num(b.id) + 1) end
-    for _, m in pairs(cfg.models or {}) do
-      for _, mid in ipairs(m.batteryIds or {}) do n = math.max(n, num(mid) + 1) end
-    end
-    cfg.nextBatteryId = n + 1
-    return string.format("bat_%03d", n)
-  end
-
-  -- Next "pack_NNNN" id: a rising counter persisted in the config, never reused,
-  -- so each physical pack keeps its statistics for its lifetime.
-  local function nextPackId()
-    local n = cfg.nextPackId or 1
-    cfg.nextPackId = n + 1
-    return string.format("pack_%04d", n)
-  end
-
-  local function sortedBatteries()
-    local out = {}
-    for _, b in ipairs(cfg.batteries) do out[#out + 1] = b end
-    table.sort(out, function(a, b) return string.lower(a.name or "") < string.lower(b.name or "") end)
-    return out
-  end
-
-  -- Smallest free display number: a new pack fills the gap of an archived one.
-  local function nextLabel(instances)
-    local used = {}
-    for _, p in ipairs(instances or {}) do used[p.label or 0] = true end
-    local n = 1
-    while used[n] do n = n + 1 end
-    return n
-  end
-
-  local function sortByLabel(instances)
-    table.sort(instances, function(a, b) return (a.label or 0) < (b.label or 0) end)
-  end
-
-  local function newProfile()
-    local p = { manufacturer = "", name = "", nameAuto = true, chemistry = CHEM_NAMES[1],
-                capacityMah = DEFAULTS.capacityMah, cells = DEFAULTS.cells,
-                instances = { { id = nil, label = 1, wear = 0, cycles = 0 } } }
-    p.name = genName(p)
-    return p
-  end
-
-  local function copyInstances(src)
-    local out = {}
-    for i, p in ipairs(src or {}) do
-      out[i] = { id = p.id, label = p.label, wear = p.wear or 0, cycles = p.cycles or 0,
-                 totalMah = p.totalMah, lastUsed = p.lastUsed, minVCell = p.minVCell,
-                 buyDate = p.buyDate }
-    end
-    return out
-  end
-
-  -- Low/Critical overrides come as a pair: once either is set, both are stored
-  -- (the missing one at its current general value). Returns true if changed.
-  local function pinOverrides(p)
-    if p.warnPct == nil and p.critPct == nil then return false end
-    local changed = false
-    if p.warnPct == nil then p.warnPct = cfg.warnPct; changed = true end
-    if p.critPct == nil then p.critPct = cfg.critPct; changed = true end
-    return changed
-  end
-
-  local function copyProfile(src)
-    local p = { id = src.id, manufacturer = src.manufacturer or "", name = src.name or "",
-                nameAuto = src.nameAuto ~= false, chemistry = src.chemistry or CHEM_NAMES[1],
-                capacityMah = src.capacityMah or DEFAULTS.capacityMah,
-                cells = src.cells or DEFAULTS.cells,
-                warnPct = src.warnPct, critPct = src.critPct,
-                instances = copyInstances(src.instances) }
-    -- Unknown profile entries (from a newer version) ride along untouched.
-    for k, v in pairs(src) do if p[k] == nil and k ~= "instances" then p[k] = v end end
-    pinOverrides(p)
-    return p
-  end
-
-  local function instancesEqual(a, b)
-    if #a ~= #b then return false end
-    for i = 1, #a do
-      if a[i].id ~= b[i].id or a[i].label ~= b[i].label
-         or (a[i].wear or 0) ~= (b[i].wear or 0) or (a[i].cycles or 0) ~= (b[i].cycles or 0)
-         or a[i].buyDate ~= b[i].buyDate then
-        return false
-      end
-    end
-    return true
-  end
-
-  local function profilesEqual(a, b)
-    return a.manufacturer == b.manufacturer and a.name == b.name and a.nameAuto == b.nameAuto
-       and a.chemistry == b.chemistry and a.capacityMah == b.capacityMah and a.cells == b.cells
-       and a.warnPct == b.warnPct and a.critPct == b.critPct
-       and instancesEqual(a.instances, b.instances)
-  end
-
-  -- Names of parallel models this profile is assigned to.
-  local function parallelModelsUsing(pid)
-    local out = {}
-    for name, m in pairs(cfg.models or {}) do
-      if m.parallel == true and m.batteryIds then
-        for _, bid in ipairs(m.batteryIds) do
-          if bid == pid then out[#out + 1] = ui.modelName(name); break end
-        end
-      end
-    end
-    table.sort(out)
-    return out
-  end
-
-  -- Retires one pack into config.archive, keyed by its pack id.
-  local function archiveInstance(profileName, inst)
-    if not inst or not inst.id then return end
-    cfg.archive[inst.id] = { name = profileName, cycles = inst.cycles or 0,
-                             totalMah = inst.totalMah or 0, lastUsed = inst.lastUsed,
-                             minVCell = inst.minVCell, buyDate = inst.buyDate }
+    ui.withRetry(M.write, onDone)
   end
 
   -- ---------------------------------------------------------------------------
@@ -210,7 +53,7 @@ return function(ctx)
 
   function Screen.drawList()
     ui.drawHeader("BATTERIES")
-    local items = sortedBatteries()
+    local items = M.sorted()
     if #items == 0 then
       lcd.drawText(ui.COL1, ui.bodyY(1), "No batteries yet - add your first.", COLOR_THEME_PRIMARY1)
     else
@@ -226,7 +69,7 @@ return function(ctx)
   end
 
   function Screen.handleList(e)
-    local items = sortedBatteries()
+    local items = M.sorted()
     S.cursor = ui.moveCursor(S.cursor, e, #items + 2)
     if isEnter(e) then
       if S.cursor <= #items then Nav.enterProfile(items[S.cursor])
@@ -244,25 +87,14 @@ return function(ctx)
   -- 7 Statistics, 8 Low, 9 Critical, then the bottom-bar buttons from 10.
 
   function Nav.enterProfile(existing)
-    if existing then
-      S.prof, S.profOrig, S.profIsNew = copyProfile(existing), copyProfile(existing), false
-    else
-      S.prof = newProfile()
-      S.profOrig, S.profIsNew = copyProfile(S.prof), true
-    end
-    sortByLabel(S.prof.instances)
-    sortByLabel(S.profOrig.instances)
+    M.open(existing)
     S.profCursor, S.profEditing, S.capStep = 1, nil, 100
     S.textBuf, S.textCharMode, S.textSnapshot = nil, false, nil
     S.screen = "profile"
   end
 
-  local function refreshAutoName()
-    if S.prof.nameAuto then S.prof.name = genName(S.prof) end
-  end
-
   local function buildProfileLines()
-    local p, lines = S.prof, {}
+    local p, lines = M.prof, {}
     local function field(item, label, value, folder)
       lines[#lines + 1] = { item = item, label = label, value = value, folder = folder }
     end
@@ -273,15 +105,15 @@ return function(ctx)
     field(5, "Cells", p.cells .. "S")
     field(6, "Packs", tostring(#p.instances), true)
     field(7, "Statistics", nil, true)
-    field(8, "Battery low", p.warnPct and (p.warnPct .. " %") or (cfg.warnPct .. " % (default)"))
-    field(9, "Battery critical", p.critPct and (p.critPct .. " %") or (cfg.critPct .. " % (default)"))
+    field(8, "Battery low", M.pctText("warnPct"))
+    field(9, "Battery critical", M.pctText("critPct"))
     return lines
   end
 
   local function profileActions()
     local acts = { "Back", "Save" }
-    if not S.profIsNew then acts[#acts + 1] = "Delete" end
-    if not S.prof.nameAuto then acts[#acts + 1] = "Reset name" end
+    if not M.isNew then acts[#acts + 1] = "Delete" end
+    if not M.prof.nameAuto then acts[#acts + 1] = "Reset name" end
     return acts
   end
 
@@ -412,7 +244,7 @@ return function(ctx)
 
   local function startTextEdit(field)
     S.profEditing  = field
-    S.textBuf      = (field == 2) and S.prof.manufacturer or S.prof.name
+    S.textBuf      = (field == 2) and M.prof.manufacturer or M.prof.name
     S.textMax      = (field == 2) and TEXT_MAX.mfr or TEXT_MAX.name
     S.textPos, S.textCharMode, S.textSnapshot = 1, false, nil
   end
@@ -422,15 +254,7 @@ return function(ctx)
   end
 
   local function commitTextEdit()
-    local s = string.gsub(S.textBuf, "%s+$", "")
-    if S.profEditing == 2 then
-      S.prof.manufacturer = s
-      refreshAutoName()
-    elseif s == "" then
-      S.prof.nameAuto, S.prof.name = true, genName(S.prof)
-    else
-      S.prof.name, S.prof.nameAuto = s, false
-    end
+    M.setText(S.profEditing, S.textBuf)
     cancelTextEdit()
   end
 
@@ -473,43 +297,29 @@ return function(ctx)
   -- --- number / dropdown / optional-number editing ---
 
   local function adjustNumber(e)
-    local item, p = S.profEditing, S.prof
+    local item, p = S.profEditing, M.prof
+    local d = isNext(e) and 1 or (isPrev(e) and -1 or 0)
     if item == 3 then
-      local idx = 1
-      for i, c in ipairs(CHEM_NAMES) do if c == p.chemistry then idx = i end end
-      if isNext(e) then idx = idx % #CHEM_NAMES + 1
-      elseif isPrev(e) then idx = (idx - 2) % #CHEM_NAMES + 1 end
-      p.chemistry = CHEM_NAMES[idx]
-      refreshAutoName()
+      local n = #M.CHEM_NAMES
+      M.setChemistry((M.chemIndex() - 1 + d) % n + 1)
     elseif item == 4 then
-      local L = LIMITS.capacityMah
       if ui.isMenu(e) then
         S.capStep = (S.capStep == 10 and 100) or (S.capStep == 100 and 1000) or 10
-      elseif isNext(e) then p.capacityMah = math.min(L.max, p.capacityMah + S.capStep)
-      elseif isPrev(e) then p.capacityMah = math.max(L.min, p.capacityMah - S.capStep) end
-      refreshAutoName()
+      else
+        M.setCapacity(p.capacityMah + d * S.capStep)
+      end
     elseif item == 5 then
-      local L = LIMITS.cells
-      if isNext(e) then p.cells = math.min(L.max, p.cells + 1)
-      elseif isPrev(e) then p.cells = math.max(L.min, p.cells - 1) end
-      refreshAutoName()
-    elseif item == 8 or item == 9 then
+      M.setCells(p.cells + d)
+    elseif (item == 8 or item == 9) and d ~= 0 then
       local key = (item == 8) and "warnPct" or "critPct"
-      local L   = LIMITS[key]
-      local cur = p[key] or cfg[key]
-      if isNext(e) then cur = math.min(L.max, cur + 1)
-      elseif isPrev(e) then cur = math.max(L.min, cur - 1) end
-      p[key] = cur
-      pinOverrides(p)
-      -- Both back on the general values clears the pair ("(default)" again).
-      if p.warnPct == cfg.warnPct and p.critPct == cfg.critPct then p.warnPct, p.critPct = nil, nil end
+      M.setPct(key, M.pct(key) + d)
     end
     if isEnter(e) then S.profEditing = nil end
   end
 
   function Screen.drawProfile()
     if S.profEditing == 1 or S.profEditing == 2 then drawTextEditor(); return end
-    ui.drawHeader(S.profIsNew and "ADD BATTERY" or "EDIT BATTERY")
+    ui.drawHeader(M.isNew and "ADD BATTERY" or "EDIT BATTERY")
     local lines = buildProfileLines()
     local focus = #lines
     for i, ln in ipairs(lines) do if ln.item == S.profCursor then focus = i break end end
@@ -530,66 +340,24 @@ return function(ctx)
 
   local function gotoList() S.screen, S.cursor = "list", 1 end
 
-  local function validateProfile()
-    if S.prof.manufacturer == "" then ui.openAlert("Manufacturer required"); return false end
-    if S.prof.warnPct and S.prof.critPct and not (S.prof.warnPct > S.prof.critPct) then
-      ui.openAlert("Battery low must be above Battery critical"); return false
-    end
-    return true
-  end
-
-  -- Mints ids for new packs and archives packs removed on the Packs page.
-  local function reconcileInstances()
-    for _, p in ipairs(S.prof.instances) do
-      if not p.id then p.id = nextPackId() end
-    end
-    local kept = {}
-    for _, p in ipairs(S.prof.instances) do kept[p.id] = true end
-    for _, p in ipairs(S.profOrig.instances) do
-      if p.id and not kept[p.id] then archiveInstance(S.profOrig.name, p) end
-    end
-  end
-
   local function saveProfile()
-    if not validateProfile() then return end
-    if S.prof.nameAuto then S.prof.name = genName(S.prof) end
-    if S.profIsNew then S.prof.id = nextBatteryId() end
-    reconcileInstances()
-    local np = copyProfile(S.prof); np.id = S.prof.id
-    if S.profIsNew then
-      cfg.batteries[#cfg.batteries + 1] = np
-    else
-      for i, b in ipairs(cfg.batteries) do
-        if b.id == S.prof.id then cfg.batteries[i] = np; break end
-      end
-    end
-    save(gotoList)
-  end
-
-  local function doDeleteProfile()
-    for _, p in ipairs(S.profOrig.instances) do archiveInstance(S.profOrig.name, p) end
-    for i, b in ipairs(cfg.batteries) do
-      if b.id == S.prof.id then table.remove(cfg.batteries, i); break end
-    end
-    -- No model keeps pointing at a profile that no longer exists.
-    for _, m in pairs(cfg.models or {}) do
-      local ids = m.batteryIds or {}
-      for i = #ids, 1, -1 do if ids[i] == S.prof.id then table.remove(ids, i) end end
-    end
+    local msg = M.invalid()
+    if msg then ui.openAlert(msg); return end
+    M.commit()
     save(gotoList)
   end
 
   local function deleteProfile()
-    local names = parallelModelsUsing(S.prof.id)
-    if #names > 0 then
-      ui.openAlert("Used by parallel model(s) " .. table.concat(names, ", ") .. ". Unassign first")
-      return
-    end
-    ui.openDialog("Delete profile and archive all " .. #S.profOrig.instances .. " packs?", doDeleteProfile)
+    local msg = M.deleteBlocked()
+    if msg then ui.openAlert(msg); return end
+    ui.openDialog(M.deleteQuestion(), function()
+      M.delete()
+      save(gotoList)
+    end)
   end
 
   local function cancelProfile()
-    if profilesEqual(S.prof, S.profOrig) then gotoList()
+    if not M.dirty() then gotoList()
     else ui.openDialog("Discard changes?", gotoList) end
   end
 
@@ -612,7 +380,8 @@ return function(ctx)
         elseif act == "Back" then cancelProfile()
         elseif act == "Delete" then deleteProfile()
         elseif act == "Reset name" then
-          S.prof.nameAuto, S.prof.name, S.profCursor = true, genName(S.prof), 1
+          M.resetName()
+          S.profCursor = 1
         end
       end
     elseif isExit(e) then
@@ -626,15 +395,6 @@ return function(ctx)
 
   local PACK_SUBS = { "cycles", "wear", "buydate", "archive" }
 
-  local function packArchiveLocked()
-    if #S.prof.instances <= 1 then return "Last pack - delete the profile instead" end
-    local names = parallelModelsUsing(S.prof.id)
-    if #names > 0 and (#S.prof.instances - 1) < 2 then
-      return "Used by parallel model(s) " .. table.concat(names, ", ") .. " - keep 2+ packs"
-    end
-    return nil
-  end
-
   function Nav.enterPacks()
     S.packsCursor, S.packDive, S.packSub = 1, nil, "cycles"
     S.packEdit = nil
@@ -642,8 +402,8 @@ return function(ctx)
   end
 
   function Screen.drawPacks()
-    ui.drawHeader("PACKS - " .. S.prof.name)
-    local packs, C = S.prof.instances, COLOR_THEME_PRIMARY1
+    ui.drawHeader("PACKS - " .. M.prof.name)
+    local packs, C = M.prof.instances, COLOR_THEME_PRIMARY1
     local hy = ui.bodyY(1)
     lcd.drawText(PK.id,   hy, "ID",     C + BOLD)
     lcd.drawText(PK.cyc,  hy, "Cycles", C + BOLD)
@@ -677,20 +437,14 @@ return function(ctx)
   end
 
   function Screen.handlePacks(e)
-    local packs = S.prof.instances
+    local packs = M.prof.instances
     if S.packEdit then
       local p = packs[S.packDive]
-      if S.packEdit == "cycles" then
-        if isNext(e) then p.cycles = math.min(9999, (p.cycles or 0) + 1)
-        elseif isPrev(e) then p.cycles = math.max(0, (p.cycles or 0) - 1) end
-      elseif S.packEdit == "wear" then
-        local L = LIMITS.wear
-        if isNext(e) then p.wear = math.min(L.max, p.wear + 1)
-        elseif isPrev(e) then p.wear = math.max(L.min, p.wear - 1) end
-      else
-        local cur = Buy.toMonths(p.buyDate) or Buy.MIN
-        if isNext(e) then p.buyDate = Buy.fromMonths(math.min(Buy.MAX, cur + 1))
-        elseif isPrev(e) then p.buyDate = Buy.fromMonths(math.max(Buy.MIN, cur - 1)) end
+      local d = isNext(e) and 1 or (isPrev(e) and -1 or 0)
+      if d ~= 0 then
+        if S.packEdit == "cycles" then M.setCycles(p, (p.cycles or 0) + d)
+        elseif S.packEdit == "wear" then M.setWear(p, p.wear + d)
+        else M.setBuy(p, (Buy.toMonths(p.buyDate) or Buy.MIN) + d) end
       end
       if isEnter(e) or isExit(e) then S.packEdit = nil end
       return
@@ -704,10 +458,10 @@ return function(ctx)
         S.packSub = PACK_SUBS[idx]
       elseif isEnter(e) then
         if S.packSub == "archive" then
-          local reason = packArchiveLocked()
+          local reason = M.archiveLocked()
           if reason then ui.openAlert(reason)
           else
-            table.remove(packs, S.packDive)   -- archived for real on profile save
+            M.removePack(S.packDive)   -- archived for real on profile save
             S.packDive = nil
             S.packsCursor = math.min(S.packsCursor, #packs + 2)
           end
@@ -726,10 +480,9 @@ return function(ctx)
       local c = S.packsCursor
       if c <= #packs then S.packDive, S.packSub = c, "cycles"
       elseif c == #packs + 1 then S.screen = "profile"
-      elseif #packs >= MAX_PACKS then ui.openAlert("Max " .. MAX_PACKS .. " packs")
       else
-        packs[#packs + 1] = { id = nil, label = nextLabel(packs), wear = 0, cycles = 0 }
-        sortByLabel(packs)
+        local msg = M.addPack()
+        if msg then ui.openAlert(msg) end
       end
     elseif isExit(e) then
       S.screen = "profile"
@@ -741,8 +494,8 @@ return function(ctx)
   -- ---------------------------------------------------------------------------
 
   function Screen.drawStats()
-    ui.drawHeader("STATISTICS - " .. S.prof.name)
-    local packs, C = S.prof.instances, COLOR_THEME_PRIMARY1
+    ui.drawHeader("STATISTICS - " .. M.prof.name)
+    local packs, C = M.prof.instances, COLOR_THEME_PRIMARY1
     local hy = ui.bodyY(1)
     lcd.drawText(SX.id,   hy, "ID",        C + BOLD)
     lcd.drawText(SX.cyc,  hy, "Cycles",    C + BOLD)
@@ -767,7 +520,7 @@ return function(ctx)
   end
 
   function Screen.handleStats(e)
-    local n = #S.prof.instances
+    local n = #M.prof.instances
     S.statsCursor = ui.moveCursor(S.statsCursor, e, n + 1)
     if isExit(e) or (isEnter(e) and S.statsCursor == n + 1) then S.screen = "profile" end
   end
@@ -776,18 +529,10 @@ return function(ctx)
   -- Page
   -- ---------------------------------------------------------------------------
 
-  -- Complete half-set Low/Critical overrides once and persist that; a failed
-  -- write is no error here, the next regular save carries it.
-  if cfg then
-    local changed = false
-    for _, b in ipairs(cfg.batteries) do if pinOverrides(b) then changed = true end end
-    if changed then core.saveConfig(cfg) end
-  end
-
   local P = {}
 
   function P.draw()
-    if not cfg then
+    if M.broken then
       ui.drawHeader("BATTERIES")
       lcd.drawText(ui.COL1, ui.bodyY(1), "Lipo Nanny has no usable settings file.", COLOR_THEME_WARNING)
       lcd.drawText(ui.COL1, ui.bodyY(2), "Fix it in the Lipo Nanny app (start page).", COLOR_THEME_PRIMARY1)
@@ -802,7 +547,7 @@ return function(ctx)
 
   -- Returns true to close the page.
   function P.handle(e)
-    if not cfg then return isExit(e) or isEnter(e) end
+    if M.broken then return isExit(e) or isEnter(e) end
     if S.screen == "profile" then Screen.handleProfile(e)
     elseif S.screen == "packs" then Screen.handlePacks(e)
     elseif S.screen == "stats" then Screen.handleStats(e)
