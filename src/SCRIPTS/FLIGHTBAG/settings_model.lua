@@ -161,20 +161,24 @@ return function(ctx)
       add({ kind = "shared", key = key, field = shared[key].field })
     end
     for _, b in ipairs(blocks) do
-      add({ kind = "head", text = nameOf(b), top = #rows > 0 })
+      local own = {}
+      for _, f in ipairs(pageFields(b.man)) do
+        if not f.shared then own[#own + 1] = f end
+      end
+      local sounds = id == "alerts" and b.core.SOUND_KEYS or {}
+      -- No head for an app whose rows on this page are all shared.
+      if b.err or #own > 0 or #sounds > 0 then
+        add({ kind = "head", text = nameOf(b), top = #rows > 0 })
+      end
       if b.err == "missing" then
         add({ kind = "fix", block = b, text = "No settings file yet", button = "Create" })
       elseif b.err then
         add({ kind = "fix", block = b, text = "Settings file damaged", button = "Reset" })
       else
-        for _, f in ipairs(pageFields(b.man)) do
-          if not f.shared then add({ kind = "field", block = b, field = f }) end
-        end
-        if id == "alerts" then
-          for _, key in ipairs(b.core.SOUND_KEYS or {}) do
-            local m = (b.man.sounds or {})[key] or {}
-            add({ kind = "sound", block = b, key = key, label = m.label or key, hint = m.hint })
-          end
+        for _, f in ipairs(own) do add({ kind = "field", block = b, field = f }) end
+        for _, key in ipairs(sounds) do
+          local m = (b.man.sounds or {})[key] or {}
+          add({ kind = "sound", block = b, key = key, label = m.label or key, hint = m.hint })
         end
       end
     end
