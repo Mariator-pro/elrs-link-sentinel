@@ -3,8 +3,9 @@
 -- =====================================================================
 -- SD card path: /SCRIPTS/FLIGHTBAG/models_model.lua
 -- Model list, the edited model (cells, parallel packs, battery assignment,
--- sensor mapping, Wingman's module switches) and the steps of saving and
--- deleting. Used by both Flight Bag tools (models.lua, LVGL/models.lua).
+-- sensor mapping, Wingman's module switches), the steps of saving and
+-- deleting, and the model's "SD Logs" special function. Used by both Flight
+-- Bag tools (models.lua, LVGL/models.lua).
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
@@ -41,6 +42,19 @@ local MODULES = {
       "GPS column, search page and GPS Homer",
       "alerts. Off: no GPS values or alerts." } },
 }
+
+-- Telemetry sensors each app's core sets for the flight log (its LOG_SENSORS),
+-- with the Wingman module that drives it. Named here so the page needs no core.
+local LOG_SENSORS = {
+  { folder = "LIPONY",   mod = "lipo", names = { "LNst", "LNpk" } },
+  { folder = "SNTNL",    mod = "link", names = { "LSst" } },
+  { folder = "GPSHOMER", mod = "gps",  names = { "GHst" } },
+}
+
+-- "SD Logs" special function: EdgeTX function type, interval limits in 0.1 s.
+local FUNC_LOGS = 18
+local MAX_SF = 64
+local LOG_INTERVAL = { min = 1, max = 50, default = 5 }
 
 return function(ctx)
   local lib = ctx.lib
@@ -149,7 +163,14 @@ return function(ctx)
   function M.rows()
     local r = cfg and { "cells", "parallel", "batteries", "sensors" } or {}
     if wcfg then r[#r + 1] = "modules" end
+    r[#r + 1] = "logs"
     return r
+  end
+
+  -- Editor row number of a row id.
+  function M.rowIndex(id)
+    for i, r in ipairs(M.rows()) do if r == id then return i end end
+    return 1
   end
 
   local function lipoDirty()
@@ -357,6 +378,189 @@ return function(ctx)
 
   function M.sensorsResetShown() return M.isActive and M.sensorsAreCustom(M.model.sensors) end
   function M.resetSensors() M.model.sensors = {} end
+
+  -- ---------------------------------------------------------------------------
+  -- SD logs: the active model's "SD Logs" special function, changed right away
+  -- (EdgeTX saves the model itself). Any such function counts, set up here or
+  -- by hand; the first one is the one shown and changed.
+  -- ---------------------------------------------------------------------------
+
+  M.LOG_INTERVAL = LOG_INTERVAL
+
+  -- Switch index of "ON" (always on): right after the 64 logical switches.
+  local function onSwitch()
+    local l1 = getSwitchIndex and getSwitchIndex("L01")
+    return l1 and l1 + 64 or nil
+  end
+
+  -- Slot and fields of the model's first SD Logs function, or nil.
+  local function scanLogs()
+    if not (model and model.getCustomFunction) then return nil end
+    for i = 0, MAX_SF - 1 do
+      local ok, cf = pcall(model.getCustomFunction, i)
+      if ok and type(cf) == "table" and cf.func == FUNC_LOGS and (cf.switch or 0) ~= 0 then return i, cf end
+    end
+    return nil
+  end
+
+  -- Cached per opened model (the editor row draws every frame); set up,
+  -- Apply and Remove read it again.
+  local logsFor, logsSlot, logsCf
+  local function findLogs()
+    if logsFor ~= M.model then
+      logsSlot, logsCf = scanLogs()
+      logsFor = M.model
+    end
+    return logsSlot, logsCf
+  end
+  local function rereadLogs() logsFor = nil end
+
+  -- First slot never used: no switch, no function, no value or file name.
+  local function freeSlot()
+    for i = 0, MAX_SF - 1 do
+      local ok, cf = pcall(model.getCustomFunction, i)
+      if ok and type(cf) == "table" and (cf.switch or 0) == 0 and (cf.func or 0) == 0
+         and (cf.value or 0) == 0 and (cf.name or "") == "" then return i end
+    end
+    return nil
+  end
+
+  local function switchName(idx)
+    if idx == onSwitch() then return "Always on" end
+    local n = getSwitchName and getSwitchName(idx)
+    return n or ("#" .. idx)
+  end
+
+  local function intervalText(v) return string.format("%.1f s", v / 10) end
+  M.intervalText = intervalText
+
+  -- Text of the "SD logs" row: "Off", "SF↓, 0.5 s", "Always on, 0.5 s";
+  -- ", disabled" when the function is switched off in the model.
+  function M.logsText()
+    if not M.isActive then return "Only for the active model" end
+    local _, cf = findLogs()
+    if not cf then return "Off" end
+    return switchName(cf.switch) .. ", " .. intervalText(cf.value or 0) .. (cf.active == 0 and ", disabled" or "")
+  end
+
+  -- Position symbols EdgeTX appends to a physical switch's name (up, down).
+  local POS_UP, POS_DOWN = "\194\130", "\194\131"
+  local function endsWith(s, e) return string.sub(s, -#e) == e end
+
+  -- Trigger choices: positions of the physical switches (EdgeTX's own list, so
+  -- any switch order, count or custom switch), defined logical switches, then
+  -- Always on. { labels }, { switch indexes }.
+  local function triggerChoices()
+    local labels, ids = {}, {}
+    local on = onSwitch()
+    local l1 = on and on - 64
+    -- Below the logical switches come physical switches, multi-position pots
+    -- and trims; a physical position ends in up or down, or is the middle
+    -- ("-") right after an up.
+    if l1 and switches then
+      local prevUp
+      for idx, n in switches(1, l1 - 1) do
+        local up = endsWith(n, POS_UP)
+        if up or endsWith(n, POS_DOWN) or (prevUp == idx - 1 and endsWith(n, "-")) then
+          labels[#labels + 1] = n; ids[#ids + 1] = idx
+        end
+        prevUp = up and idx or nil
+      end
+    end
+    if l1 and model.getLogicalSwitch then
+      for i = 0, 63 do
+        local ok, ls = pcall(model.getLogicalSwitch, i)
+        if ok and type(ls) == "table" and (ls.func or 0) ~= 0 then
+          labels[#labels + 1] = getSwitchName(l1 + i) or ("L" .. (i + 1)); ids[#ids + 1] = l1 + i
+        end
+      end
+    end
+    if on then labels[#labels + 1] = "Always on"; ids[#ids + 1] = on end
+    return labels, ids
+  end
+
+  -- Draft of the SD LOGS page: { exists, disabled (switched off in the model),
+  -- switch (nil: not chosen yet), interval }. An interval set by hand outside
+  -- the page's range stays until it is changed; 0 (EdgeTX logs nothing) gets
+  -- the default.
+  function M.openLogs()
+    rereadLogs()
+    local _, cf = findLogs()
+    local v = cf and cf.value or 0
+    M.logs = { exists = cf ~= nil, disabled = cf ~= nil and cf.active == 0, switch = cf and cf.switch,
+               interval = v > 0 and v or LOG_INTERVAL.default }
+  end
+
+  -- Trigger text of the draft; the arm switch is the default kind.
+  function M.logsTrigger()
+    local s = M.logs.switch
+    if not s then return "Choose arm switch" end
+    return switchName(s)
+  end
+
+  function M.logsTriggerChoices()
+    local labels, ids = triggerChoices()
+    local cur = 1
+    for i, id in ipairs(ids) do if id == M.logs.switch then cur = i end end
+    return labels, cur, ids
+  end
+
+  function M.setLogsSwitch(id) M.logs.switch = id end
+
+  -- True when the draft differs from the model's function.
+  function M.logsDirty()
+    local _, cf = findLogs()
+    if not cf then return M.logs.switch ~= nil or M.logs.interval ~= LOG_INTERVAL.default end
+    return M.logs.switch ~= cf.switch or M.logs.interval ~= cf.value
+  end
+
+  -- One step within the page's range (a longer interval set by hand comes
+  -- back into it).
+  function M.stepLogsInterval(d)
+    M.logs.interval = math.max(LOG_INTERVAL.min, math.min(LOG_INTERVAL.max, M.logs.interval + d))
+  end
+
+  -- Writes the draft into the model: the existing function's slot, else a free
+  -- one, switched on. Returns true, or nil and "switch" / "full".
+  function M.applyLogs()
+    local d = M.logs
+    if not d.switch then return nil, "switch" end
+    local slot = findLogs() or freeSlot()
+    if not slot then return nil, "full" end
+    model.setCustomFunction(slot, { switch = d.switch, func = FUNC_LOGS, value = d.interval,
+                                    mode = 0, param = 0, active = 1 })
+    rereadLogs()
+    d.exists, d.disabled = true, false
+    return true
+  end
+
+  -- Clears the model's SD Logs function.
+  function M.removeLogs()
+    local slot = findLogs()
+    if slot then model.setCustomFunction(slot, { switch = 0, func = 0 }) end
+    rereadLogs()
+    M.logs.exists, M.logs.disabled = false, false
+  end
+
+  -- Log sensors of the installed apps (ctx.allApps: every app, not only this
+  -- page's) that Wingman shows for this model (all when Wingman is missing):
+  -- found, total. 0, 0 without such apps.
+  function M.logSensors()
+    local installed = {}
+    for _, a in ipairs(ctx.allApps or ctx.apps) do installed[a.folder] = true end
+    local mods = M.model and M.model.mods
+    local found, total = 0, 0
+    for _, s in ipairs(LOG_SENSORS) do
+      if installed[s.folder] and not (mods and mods[s.mod] == false) then
+        for _, n in ipairs(s.names) do
+          total = total + 1
+          local ok, info = pcall(getFieldInfo, n)
+          if ok and info then found = found + 1 end
+        end
+      end
+    end
+    return found, total
+  end
 
   return M
 end

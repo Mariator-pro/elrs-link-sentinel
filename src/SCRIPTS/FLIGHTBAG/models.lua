@@ -3,8 +3,8 @@
 -- =====================================================================
 -- SD card path: /SCRIPTS/FLIGHTBAG/models.lua
 -- Drawn view of models_model.lua: list, model editor (cells, parallel packs),
--- battery assignment, the per-model sensor mapping and Wingman's module
--- switches.
+-- battery assignment, the per-model sensor mapping, Wingman's module
+-- switches and the model's SD logs.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
@@ -90,8 +90,10 @@ return function(ctx)
       elseif id == "sensors" then
         ui.drawFieldRow(i, "Sensors", M.sensorsAreCustom(m.sensors) and "custom" or "default",
                         { selected = sel, folder = true })
-      else
+      elseif id == "modules" then
         ui.drawFieldRow(i, "Show in Wingman", M.modsText(), { selected = sel, folder = true })
+      else
+        ui.drawFieldRow(i, "SD logs", M.logsText(), { selected = sel, folder = M.isActive, disabled = not M.isActive })
       end
     end
     ui.drawButtonBar(M.isNew and { "Back", "Save" } or { "Back", "Save", "Delete" }, #rows + 1, S.modelCursor)
@@ -164,6 +166,8 @@ return function(ctx)
       elseif id == "batteries" then S.assignItems, S.assignCursor, S.screen = M.assignItems(), 1, "assign"
       elseif id == "sensors" then M.openSensors(); S.sensorCursor, S.screen = 1, "sensors"
       elseif id == "modules" then S.modsCursor, S.screen = 1, "modules"
+      elseif id == "logs" then
+        if M.isActive then M.openLogs(); S.logsCursor, S.logsEditing, S.screen = 1, false, "logs" end
       elseif c == n + 1 then cancelModel()
       elseif c == n + 2 then saveModel()
       elseif c == n + 3 then deleteModel() end
@@ -178,7 +182,7 @@ return function(ctx)
 
   local function applyAssign()
     M.applyAssign(S.assignItems)
-    S.screen, S.modelCursor = "model", 3
+    S.screen, S.modelCursor = "model", M.rowIndex("batteries")
   end
 
   function Screen.drawAssign()
@@ -217,7 +221,7 @@ return function(ctx)
   -- Screen: sensor mapping
   -- ---------------------------------------------------------------------------
 
-  local function leaveSensors() S.screen, S.modelCursor = "model", 4 end
+  local function leaveSensors() S.screen, S.modelCursor = "model", M.rowIndex("sensors") end
 
   -- Help lines for the focused row, above the button bar.
   local function drawHelp(desc)
@@ -278,7 +282,7 @@ return function(ctx)
   -- Screen: Show in Wingman (module switches On/Off), stored with the model's Save
   -- ---------------------------------------------------------------------------
 
-  local function leaveModules() S.screen, S.modelCursor = "model", #M.rows() end
+  local function leaveModules() S.screen, S.modelCursor = "model", M.rowIndex("modules") end
 
   function Screen.drawModules()
     local keys = M.moduleKeys()
@@ -302,6 +306,77 @@ return function(ctx)
   end
 
   -- ---------------------------------------------------------------------------
+  -- Screen: SD logs (the model's "SD Logs" special function, changed at once)
+  -- ---------------------------------------------------------------------------
+
+  local LOGS_BACK = 3
+
+  local function leaveLogs() S.screen, S.modelCursor = "model", M.rowIndex("logs") end
+
+  local function logsButtons()
+    if M.logs.exists then return { "Back", "Apply", "Remove" } end
+    return { "Back", "Set up" }
+  end
+
+  function Screen.drawLogs()
+    ui.drawHeader("SD LOGS  " .. M.name(M.model.filename))
+    ui.drawFieldRow(1, "Trigger", M.logsTrigger(), { selected = S.logsCursor == 1, popup = true })
+    ui.drawFieldRow(2, "Interval", M.intervalText(M.logs.interval),
+                    { selected = S.logsCursor == 2, editing = S.logsEditing })
+    if M.logs.disabled then
+      lcd.drawText(ui.COL1, ui.bodyY(3), "Disabled in the model", COLOR_THEME_WARNING)
+      drawHelp({ "The special function is switched off.", "Apply switches it on again." })
+    elseif M.logs.exists then
+      local found, total = M.logSensors()
+      if total > 0 and found < total then
+        lcd.drawText(ui.COL1, ui.bodyY(3), "Log sensors: " .. found .. " of " .. total .. " found",
+                     COLOR_THEME_WARNING)
+        drawHelp({ "Open Model > Telemetry and select", "Discover new sensors while the apps run." })
+      elseif total > 0 then
+        lcd.drawText(ui.COL1, ui.bodyY(3), "Log sensors: all " .. total .. " found", COLOR_THEME_PRIMARY1)
+      end
+    else
+      drawHelp({ "Choose the arm switch, or Always on", "to log from power-on to power-off." })
+    end
+    ui.drawButtonBar(logsButtons(), LOGS_BACK, S.logsCursor)
+  end
+
+  local function applyLogs()
+    local ok, err = M.applyLogs()
+    if ok then leaveLogs()
+    elseif err == "switch" then ui.openAlert("Choose the arm switch first.")
+    else ui.openAlert("No free special function. Remove one in the model.") end
+  end
+
+  local function cancelLogs()
+    if M.logsDirty() then ui.openDialog("Discard changes?", leaveLogs) else leaveLogs() end
+  end
+
+  function Screen.handleLogs(e)
+    if S.logsEditing then
+      if isNext(e) then M.stepLogsInterval(1)
+      elseif isPrev(e) then M.stepLogsInterval(-1)
+      elseif isEnter(e) or isExit(e) then S.logsEditing = false end
+      return
+    end
+    S.logsCursor = ui.moveCursor(S.logsCursor, e, LOGS_BACK - 1 + #logsButtons())
+    if isEnter(e) then
+      local c = S.logsCursor
+      if c == 1 then
+        local labels, cur, ids = M.logsTriggerChoices()
+        ui.openPicker("Trigger", labels, cur, function(i) M.setLogsSwitch(ids[i]) end)
+      elseif c == 2 then S.logsEditing = true
+      elseif c == LOGS_BACK then cancelLogs()
+      elseif c == LOGS_BACK + 1 then applyLogs()
+      else
+        ui.openDialog("Remove SD logs from this model?", function() M.removeLogs(); leaveLogs() end)
+      end
+    elseif isExit(e) then
+      cancelLogs()
+    end
+  end
+
+  -- ---------------------------------------------------------------------------
   -- Page
   -- ---------------------------------------------------------------------------
 
@@ -319,6 +394,7 @@ return function(ctx)
     elseif S.screen == "assign" then Screen.drawAssign()
     elseif S.screen == "sensors" then Screen.drawSensors()
     elseif S.screen == "modules" then Screen.drawModules()
+    elseif S.screen == "logs" then Screen.drawLogs()
     else Screen.drawList() end
   end
 
@@ -329,6 +405,7 @@ return function(ctx)
     elseif S.screen == "assign" then Screen.handleAssign(e)
     elseif S.screen == "sensors" then Screen.handleSensors(e)
     elseif S.screen == "modules" then Screen.handleModules(e)
+    elseif S.screen == "logs" then Screen.handleLogs(e)
     else return Screen.handleList(e) == true end
     return false
   end

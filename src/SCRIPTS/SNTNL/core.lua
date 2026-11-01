@@ -29,7 +29,7 @@ local M = {}
 -- Single source of the version: the settings tool reads VERSION, API and
 -- CONFIG_PATH as text from the head of this file (keep them near the top).
 M.VERSION = "3.0.0"
-M.API     = { 1, 0 }
+M.API     = { 1, 1 }
 M.CONFIG_PATH = "/SCRIPTS/SNTNL/config.lua"
 -- API is the interface version for scripts that load this core: { breaking, additive }.
 -- Adding an exported function or field bumps the second number; changing or
@@ -993,8 +993,21 @@ local function holdLive(state, result, up)
   return held
 end
 
+-- Telemetry sensor for the flight log: EdgeTX writes it into every log row, so a
+-- log viewer sees where the radio warned. ID 0x4C53 is "LS" in ASCII. EdgeTX adds
+-- a new sensor only while "Discover new sensors" runs.
+local LOG_SENSOR_ID = 0x4C53
+M.LOG_SENSORS = { "LSst" }
+
+-- LSst: the warning stage (0 OK, 1 weak signal, 2 link quality critical), -1 without
+-- one (no link, sensors missing).
+function M.writeLogSensors(stage)
+  if not setTelemetryValue then return end
+  setTelemetryValue(LOG_SENSOR_ID, 0, 0, stage or -1, 0, 0, "LSst")
+end
+
 -- ---------------------------------------------------------------------------
--- One full cycle: read -> evaluate -> play -> hold (holdLive). Returns the result
+-- One full cycle: read -> evaluate -> play -> hold (holdLive) -> log sensor. Returns the result
 -- table plus the raw snapshot for the widget. The function script ignores the return value;
 -- the widget derives all display values from it.
 -- ---------------------------------------------------------------------------
@@ -1030,7 +1043,9 @@ function M.update(state, now)
     playFile(M.SOUNDS.rec)
   end
 
-  return holdLive(state, result, snap.rssiValid)
+  local out = holdLive(state, result, snap.rssiValid)
+  M.writeLogSensors(out.stage)
+  return out
 end
 
 return M

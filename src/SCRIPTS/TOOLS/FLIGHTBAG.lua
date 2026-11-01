@@ -64,7 +64,7 @@ local function openPage(p)
     ui.openAlert(p.label .. " could not be started. Copy " .. BASE .. " to the SD card again.")
     return
   end
-  local pok, pg = pcall(mk, { ui = ui, lib = A, apps = A.pageApps(apps, p), id = p.id, title = p.label })
+  local pok, pg = pcall(mk, { ui = ui, lib = A, apps = A.pageApps(apps, p), allApps = apps, id = p.id, title = p.label })
   if pok and type(pg) == "table" then page = pg else A.unload(apps) end
 end
 
