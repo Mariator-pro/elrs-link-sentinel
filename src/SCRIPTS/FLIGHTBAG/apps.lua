@@ -57,7 +57,7 @@ local function removeLeftover(folder)
 end
 
 -- Apps sorted by folder, Wingman first: { folder, base, version, configPath,
--- hasManifest, name, ok, noConfig, icon (Bitmap), iconPath }.
+-- hasManifest, name, ok, apiMinor, noConfig, icon (Bitmap), iconPath }.
 function A.scan()
   local list = {}
   pcall(function()
@@ -77,6 +77,7 @@ function A.scan()
           app.name = string.match(readHead(base .. "manifest.lua"), 'name%s*=%s*"([^"]+)"')
         end
         app.ok = app.hasManifest and tonumber(a) == API_MAJOR and tonumber(b) ~= nil
+        app.apiMinor = tonumber(b)
         app.noConfig = app.ok and app.configPath ~= nil and not exists(app.configPath)
         list[#list + 1] = app
       end

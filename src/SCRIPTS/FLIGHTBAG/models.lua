@@ -323,7 +323,10 @@ return function(ctx)
     ui.drawFieldRow(1, "Trigger", M.logsTrigger(), { selected = S.logsCursor == 1, popup = true })
     ui.drawFieldRow(2, "Interval", M.intervalText(M.logs.interval),
                     { selected = S.logsCursor == 2, editing = S.logsEditing })
-    if M.logs.disabled then
+    if M.logs.noTrigger then
+      lcd.drawText(ui.COL1, ui.bodyY(3), "No trigger in the model", COLOR_THEME_WARNING)
+      drawHelp({ "Without a switch EdgeTX never logs.", "Choose a trigger and Apply." })
+    elseif M.logs.disabled then
       lcd.drawText(ui.COL1, ui.bodyY(3), "Disabled in the model", COLOR_THEME_WARNING)
       drawHelp({ "The special function is switched off.", "Apply switches it on again." })
     elseif M.logs.exists then

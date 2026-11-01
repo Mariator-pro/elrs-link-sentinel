@@ -45,6 +45,7 @@ local MODULES = {
 
 -- Telemetry sensors each app's core sets for the flight log (its LOG_SENSORS),
 -- with the Wingman module that drives it. Named here so the page needs no core.
+local LOG_SENSORS_API = 1   -- cores write them from interface 1.1 on
 local LOG_SENSORS = {
   { folder = "LIPONY",   mod = "lipo", names = { "LNst", "LNpk" } },
   { folder = "SNTNL",    mod = "link", names = { "LSst" } },
@@ -393,15 +394,23 @@ return function(ctx)
     return l1 and l1 + 64 or nil
   end
 
-  -- Slot and fields of the model's first SD Logs function, or nil.
+  -- Slot and fields of the model's first SD Logs function with a switch, else
+  -- of the first one without (EdgeTX never runs it; Apply gives it a trigger
+  -- instead of adding a second one), or nil.
   local function scanLogs()
     if not (model and model.getCustomFunction) then return nil end
+    local bareSlot, bareCf
     for i = 0, MAX_SF - 1 do
       local ok, cf = pcall(model.getCustomFunction, i)
-      if ok and type(cf) == "table" and cf.func == FUNC_LOGS and (cf.switch or 0) ~= 0 then return i, cf end
+      if ok and type(cf) == "table" and cf.func == FUNC_LOGS then
+        if (cf.switch or 0) ~= 0 then return i, cf end
+        if not bareSlot then bareSlot, bareCf = i, cf end
+      end
     end
-    return nil
+    return bareSlot, bareCf
   end
+
+  local function triggerOf(cf) return (cf.switch or 0) ~= 0 and cf.switch or nil end
 
   -- Cached per opened model (the editor row draws every frame); set up,
   -- Apply and Remove read it again.
@@ -434,12 +443,13 @@ return function(ctx)
   local function intervalText(v) return string.format("%.1f s", v / 10) end
   M.intervalText = intervalText
 
-  -- Text of the "SD logs" row: "Off", "SF↓, 0.5 s", "Always on, 0.5 s";
-  -- ", disabled" when the function is switched off in the model.
+  -- Text of the "SD logs" row: "Off", "No trigger", "SF↓, 0.5 s", "Always on,
+  -- 0.5 s"; ", disabled" when the function is switched off in the model.
   function M.logsText()
     if not M.isActive then return "Only for the active model" end
     local _, cf = findLogs()
     if not cf then return "Off" end
+    if not triggerOf(cf) then return "No trigger" end
     return switchName(cf.switch) .. ", " .. intervalText(cf.value or 0) .. (cf.active == 0 and ", disabled" or "")
   end
 
@@ -480,14 +490,16 @@ return function(ctx)
   end
 
   -- Draft of the SD LOGS page: { exists, disabled (switched off in the model),
-  -- switch (nil: not chosen yet), interval }. An interval set by hand outside
+  -- noTrigger (the model's function has no switch), switch (nil: not chosen
+  -- yet), interval }. An interval set by hand outside
   -- the page's range stays until it is changed; 0 (EdgeTX logs nothing) gets
   -- the default.
   function M.openLogs()
     rereadLogs()
     local _, cf = findLogs()
     local v = cf and cf.value or 0
-    M.logs = { exists = cf ~= nil, disabled = cf ~= nil and cf.active == 0, switch = cf and cf.switch,
+    M.logs = { exists = cf ~= nil, disabled = cf ~= nil and cf.active == 0,
+               noTrigger = cf ~= nil and not triggerOf(cf), switch = cf and triggerOf(cf),
                interval = v > 0 and v or LOG_INTERVAL.default }
   end
 
@@ -498,11 +510,16 @@ return function(ctx)
     return switchName(s)
   end
 
+  -- A trigger set in EdgeTX that the list has no entry for (inverted switch,
+  -- flight mode, ...) heads the list, so confirming keeps it.
   function M.logsTriggerChoices()
     local labels, ids = triggerChoices()
-    local cur = 1
-    for i, id in ipairs(ids) do if id == M.logs.switch then cur = i end end
-    return labels, cur, ids
+    local s, cur = M.logs.switch, nil
+    for i, id in ipairs(ids) do if id == s then cur = i end end
+    if s and not cur then
+      table.insert(labels, 1, switchName(s)); table.insert(ids, 1, s)
+    end
+    return labels, cur or 1, ids
   end
 
   function M.setLogsSwitch(id) M.logs.switch = id end
@@ -511,7 +528,7 @@ return function(ctx)
   function M.logsDirty()
     local _, cf = findLogs()
     if not cf then return M.logs.switch ~= nil or M.logs.interval ~= LOG_INTERVAL.default end
-    return M.logs.switch ~= cf.switch or M.logs.interval ~= cf.value
+    return M.logs.switch ~= triggerOf(cf) or M.logs.interval ~= cf.value
   end
 
   -- One step within the page's range (a longer interval set by hand comes
@@ -530,7 +547,7 @@ return function(ctx)
     model.setCustomFunction(slot, { switch = d.switch, func = FUNC_LOGS, value = d.interval,
                                     mode = 0, param = 0, active = 1 })
     rereadLogs()
-    d.exists, d.disabled = true, false
+    d.exists, d.disabled, d.noTrigger = true, false, false
     return true
   end
 
@@ -539,15 +556,18 @@ return function(ctx)
     local slot = findLogs()
     if slot then model.setCustomFunction(slot, { switch = 0, func = 0 }) end
     rereadLogs()
-    M.logs.exists, M.logs.disabled = false, false
+    M.logs.exists, M.logs.disabled, M.logs.noTrigger = false, false, false
   end
 
   -- Log sensors of the installed apps (ctx.allApps: every app, not only this
   -- page's) that Wingman shows for this model (all when Wingman is missing):
-  -- found, total. 0, 0 without such apps.
+  -- found, total. 0, 0 without such apps. An older core writes none, so it
+  -- does not count.
   function M.logSensors()
     local installed = {}
-    for _, a in ipairs(ctx.allApps or ctx.apps) do installed[a.folder] = true end
+    for _, a in ipairs(ctx.allApps or ctx.apps) do
+      if a.ok and (a.apiMinor or 0) >= LOG_SENSORS_API then installed[a.folder] = true end
+    end
     local mods = M.model and M.model.mods
     local found, total = 0, 0
     for _, s in ipairs(LOG_SENSORS) do
