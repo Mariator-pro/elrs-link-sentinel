@@ -309,9 +309,10 @@ return function(ctx)
   -- Screen: SD logs (the model's "SD Logs" special function, changed at once)
   -- ---------------------------------------------------------------------------
 
-  local LOGS_BACK = 3
-
   local function leaveLogs() S.screen, S.modelCursor = "model", M.rowIndex("logs") end
+
+  -- Log, Arm switch (only for Armed), Interval; the buttons follow.
+  local function logsRows() return M.logs.always and 2 or 3 end
 
   local function logsButtons()
     if M.logs.exists then return { "Back", "Apply", "Remove" } end
@@ -320,28 +321,33 @@ return function(ctx)
 
   function Screen.drawLogs()
     ui.drawHeader("SD LOGS  " .. M.name(M.model.filename))
-    ui.drawFieldRow(1, "Trigger", M.logsTrigger(), { selected = S.logsCursor == 1, popup = true })
-    ui.drawFieldRow(2, "Interval", M.intervalText(M.logs.interval),
-                    { selected = S.logsCursor == 2, editing = S.logsEditing })
+    local rows = logsRows()
+    ui.drawFieldRow(1, "Log", M.LOG_MODES[M.logsMode()], { selected = S.logsCursor == 1, popup = true })
+    if rows == 3 then
+      ui.drawFieldRow(2, "Arm switch", M.logsArm(), { selected = S.logsCursor == 2, popup = true })
+    end
+    ui.drawFieldRow(rows, "Interval", M.intervalText(M.logs.interval),
+                    { selected = S.logsCursor == rows, editing = S.logsEditing })
+    local y = ui.bodyY(rows + 1)
     if M.logs.noTrigger then
-      lcd.drawText(ui.COL1, ui.bodyY(3), "No trigger in the model", COLOR_THEME_WARNING)
-      drawHelp({ "Without a switch EdgeTX never logs.", "Choose a trigger and Apply." })
+      lcd.drawText(ui.COL1, y, "No trigger in the model", COLOR_THEME_WARNING)
+      drawHelp({ "Without a switch EdgeTX never logs.", "Choose the arm switch and Apply." })
     elseif M.logs.disabled then
-      lcd.drawText(ui.COL1, ui.bodyY(3), "Disabled in the model", COLOR_THEME_WARNING)
+      lcd.drawText(ui.COL1, y, "Disabled in the model", COLOR_THEME_WARNING)
       drawHelp({ "The special function is switched off.", "Apply switches it on again." })
     elseif M.logs.exists then
       local found, total = M.logSensors()
       if total > 0 and found < total then
-        lcd.drawText(ui.COL1, ui.bodyY(3), "Log sensors: " .. found .. " of " .. total .. " found",
+        lcd.drawText(ui.COL1, y, "Log sensors: " .. found .. " of " .. total .. " found",
                      COLOR_THEME_WARNING)
         drawHelp({ "Open Model > Telemetry and select", "Discover new sensors while the apps run." })
       elseif total > 0 then
-        lcd.drawText(ui.COL1, ui.bodyY(3), "Log sensors: all " .. total .. " found", COLOR_THEME_PRIMARY1)
+        lcd.drawText(ui.COL1, y, "Log sensors: all " .. total .. " found", COLOR_THEME_PRIMARY1)
       end
     else
-      drawHelp({ "Choose the arm switch, or Always on", "to log from power-on to power-off." })
+      drawHelp({ "Armed: one log file per flight.", "Always on: from power-on to power-off." })
     end
-    ui.drawButtonBar(logsButtons(), LOGS_BACK, S.logsCursor)
+    ui.drawButtonBar(logsButtons(), rows + 1, S.logsCursor)
   end
 
   local function applyLogs()
@@ -362,15 +368,18 @@ return function(ctx)
       elseif isEnter(e) or isExit(e) then S.logsEditing = false end
       return
     end
-    S.logsCursor = ui.moveCursor(S.logsCursor, e, LOGS_BACK - 1 + #logsButtons())
+    local rows = logsRows()
+    S.logsCursor = ui.moveCursor(S.logsCursor, e, rows + #logsButtons())
     if isEnter(e) then
       local c = S.logsCursor
       if c == 1 then
-        local labels, cur, ids = M.logsTriggerChoices()
-        ui.openPicker("Trigger", labels, cur, function(i) M.setLogsSwitch(ids[i]) end)
-      elseif c == 2 then S.logsEditing = true
-      elseif c == LOGS_BACK then cancelLogs()
-      elseif c == LOGS_BACK + 1 then applyLogs()
+        ui.openPicker("Log", M.LOG_MODES, M.logsMode(), function(i) M.setLogsMode(i) end)
+      elseif c == rows then S.logsEditing = true
+      elseif c == 2 then
+        local labels, cur, ids = M.logsArmChoices()
+        ui.openPicker("Arm switch", labels, cur, function(i) M.setLogsArm(ids[i]) end)
+      elseif c == rows + 1 then cancelLogs()
+      elseif c == rows + 2 then applyLogs()
       else
         ui.openDialog("Remove SD logs from this model?", function() M.removeLogs(); leaveLogs() end)
       end

@@ -457,10 +457,10 @@ return function(ctx)
   local POS_UP, POS_DOWN = "\194\130", "\194\131"
   local function endsWith(s, e) return string.sub(s, -#e) == e end
 
-  -- Trigger choices: positions of the physical switches (EdgeTX's own list, so
-  -- any switch order, count or custom switch), defined logical switches, then
-  -- Always on. { labels }, { switch indexes }.
-  local function triggerChoices()
+  -- Arm switch choices: positions of the physical switches (EdgeTX's own list,
+  -- so any switch order, count or custom switch), then defined logical
+  -- switches. { labels }, { switch indexes }.
+  local function armChoices()
     local labels, ids = {}, {}
     local on = onSwitch()
     local l1 = on and on - 64
@@ -485,35 +485,52 @@ return function(ctx)
         end
       end
     end
-    if on then labels[#labels + 1] = "Always on"; ids[#ids + 1] = on end
     return labels, ids
   end
 
   -- Draft of the SD LOGS page: { exists, disabled (switched off in the model),
-  -- noTrigger (the model's function has no switch), switch (nil: not chosen
-  -- yet), interval }. An interval set by hand outside
-  -- the page's range stays until it is changed; 0 (EdgeTX logs nothing) gets
-  -- the default.
+  -- noTrigger (the model's function has no switch), always (Always on instead
+  -- of the arm switch), switch (arm switch, nil: not chosen yet; kept while
+  -- Always on is chosen), interval }. An interval set by hand outside the
+  -- page's range stays until it is changed; 0 (EdgeTX logs nothing) gets the
+  -- default.
   function M.openLogs()
     rereadLogs()
     local _, cf = findLogs()
     local v = cf and cf.value or 0
+    local trig = cf and triggerOf(cf)
+    local always = trig ~= nil and trig == onSwitch()
+    local arm = nil
+    if not always then arm = trig end
     M.logs = { exists = cf ~= nil, disabled = cf ~= nil and cf.active == 0,
-               noTrigger = cf ~= nil and not triggerOf(cf), switch = cf and triggerOf(cf),
+               noTrigger = cf ~= nil and not trig, always = always, switch = arm,
                interval = v > 0 and v or LOG_INTERVAL.default }
   end
 
-  -- Trigger text of the draft; the arm switch is the default kind.
-  function M.logsTrigger()
+  -- Switch the draft writes: Always on or the arm switch (nil: none yet).
+  local function draftSwitch()
+    if M.logs.always then return onSwitch() end
+    return M.logs.switch
+  end
+
+  M.LOG_MODES = { "Armed", "Always on" }
+
+  -- Index of the draft's kind in LOG_MODES.
+  function M.logsMode() return M.logs.always and 2 or 1 end
+
+  function M.setLogsMode(i) M.logs.always = i == 2 end
+
+  -- Arm switch text of the draft.
+  function M.logsArm()
     local s = M.logs.switch
     if not s then return "Choose arm switch" end
     return switchName(s)
   end
 
-  -- A trigger set in EdgeTX that the list has no entry for (inverted switch,
+  -- A switch set in EdgeTX that the list has no entry for (inverted switch,
   -- flight mode, ...) heads the list, so confirming keeps it.
-  function M.logsTriggerChoices()
-    local labels, ids = triggerChoices()
+  function M.logsArmChoices()
+    local labels, ids = armChoices()
     local s, cur = M.logs.switch, nil
     for i, id in ipairs(ids) do if id == s then cur = i end end
     if s and not cur then
@@ -522,13 +539,13 @@ return function(ctx)
     return labels, cur or 1, ids
   end
 
-  function M.setLogsSwitch(id) M.logs.switch = id end
+  function M.setLogsArm(id) M.logs.switch = id end
 
   -- True when the draft differs from the model's function.
   function M.logsDirty()
     local _, cf = findLogs()
-    if not cf then return M.logs.switch ~= nil or M.logs.interval ~= LOG_INTERVAL.default end
-    return M.logs.switch ~= triggerOf(cf) or M.logs.interval ~= cf.value
+    if not cf then return draftSwitch() ~= nil or M.logs.interval ~= LOG_INTERVAL.default end
+    return draftSwitch() ~= triggerOf(cf) or M.logs.interval ~= cf.value
   end
 
   -- One step within the page's range (a longer interval set by hand comes
@@ -541,10 +558,11 @@ return function(ctx)
   -- one, switched on. Returns true, or nil and "switch" / "full".
   function M.applyLogs()
     local d = M.logs
-    if not d.switch then return nil, "switch" end
+    local sw = draftSwitch()
+    if not sw then return nil, "switch" end
     local slot = findLogs() or freeSlot()
     if not slot then return nil, "full" end
-    model.setCustomFunction(slot, { switch = d.switch, func = FUNC_LOGS, value = d.interval,
+    model.setCustomFunction(slot, { switch = sw, func = FUNC_LOGS, value = d.interval,
                                     mode = 0, param = 0, active = 1 })
     rereadLogs()
     d.exists, d.disabled, d.noTrigger = true, false, false
