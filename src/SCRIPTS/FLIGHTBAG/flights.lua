@@ -89,12 +89,13 @@ return function(ctx)
     end
     lcd.drawText(COL1, ui.bodyY(2), stamp, COLOR_THEME_PRIMARY1)
     if entry.model ~= "" then lcd.drawText(COL1, ui.bodyY(3), entry.model, COLOR_THEME_PRIMARY1) end
+    lcd.drawText(COL1, ui.bodyY(4), "LAST POSITION", COLOR_THEME_DISABLED)
     -- LAT / LON labels, the values on one edge
     local vx = COL1 + math.max(lcd.sizeText("LAT "), lcd.sizeText("LON "))
-    lcd.drawText(COL1, ui.bodyY(4), "LAT ", COLOR_THEME_DISABLED)
-    lcd.drawText(vx, ui.bodyY(4), M.coord(entry.lat), COLOR_THEME_PRIMARY1)
-    lcd.drawText(COL1, ui.bodyY(5), "LON ", COLOR_THEME_DISABLED)
-    lcd.drawText(vx, ui.bodyY(5), M.coord(entry.lon), COLOR_THEME_PRIMARY1)
+    lcd.drawText(COL1, ui.bodyY(5), "LAT ", COLOR_THEME_DISABLED)
+    lcd.drawText(vx, ui.bodyY(5), M.coord(entry.lat), COLOR_THEME_PRIMARY1)
+    lcd.drawText(COL1, ui.bodyY(6), "LON ", COLOR_THEME_DISABLED)
+    lcd.drawText(vx, ui.bodyY(6), M.coord(entry.lon), COLOR_THEME_PRIMARY1)
     ui.drawButtonBar({ "Back" }, 1, 1)
   end
 
