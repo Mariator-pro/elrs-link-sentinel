@@ -28,7 +28,7 @@
 local M = {}
 -- Single source of the version: the settings tool reads VERSION, API and
 -- CONFIG_PATH as text from the head of this file (keep them near the top).
-M.VERSION = "3.0.0"
+M.VERSION = "3.1.0"
 M.API     = { 1, 1 }
 M.CONFIG_PATH = "/SCRIPTS/SNTNL/config.lua"
 -- API is the interface version for scripts that load this core: { breaking, additive }.
