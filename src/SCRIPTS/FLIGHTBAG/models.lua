@@ -2,9 +2,9 @@
 -- models.lua  --  Flight Bag page "Models" (Lipo Nanny, Wingman)
 -- =====================================================================
 -- SD card path: /SCRIPTS/FLIGHTBAG/models.lua
--- Drawn view of models_model.lua: list, model editor (cells, parallel packs),
--- battery assignment, the per-model sensor mapping, Wingman's module
--- switches and the model's SD logs.
+-- Drawn view of models_model.lua: list, model page, battery page (cells,
+-- parallel packs), battery assignment, the per-model sensor mapping, Wingman's
+-- module switches and the model's SD logs.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
@@ -66,12 +66,12 @@ return function(ctx)
   end
 
   -- ---------------------------------------------------------------------------
-  -- Screen: model editor (Lipo Nanny's rows, Wingman's row, buttons)
+  -- Screen: model page (Battery, Show in Wingman, SD logs, buttons)
   -- ---------------------------------------------------------------------------
 
   function Nav.enterModel(key)
     M.open(key)
-    S.modelCursor, S.modelEditing = 1, false
+    S.modelCursor = 1
     S.screen = "model"
   end
 
@@ -81,15 +81,8 @@ return function(ctx)
     local rows = M.rows()
     for i, id in ipairs(rows) do
       local sel = S.modelCursor == i
-      if id == "cells" then
-        ui.drawFieldRow(i, "Cells", m.cells .. "S", { selected = sel, editing = S.modelEditing })
-      elseif id == "parallel" then
-        ui.drawFieldRow(i, "Parallel packs", m.parallel and "Yes" or "No", { selected = sel })
-      elseif id == "batteries" then
-        ui.drawFieldRow(i, "Batteries", #m.batteryIds .. " selected", { selected = sel, folder = true })
-      elseif id == "sensors" then
-        ui.drawFieldRow(i, "Sensors", M.sensorsAreCustom(m.sensors) and "custom" or "default",
-                        { selected = sel, folder = true })
+      if id == "battery" then
+        ui.drawFieldRow(i, "Battery", M.batteryText(), { selected = sel, folder = true })
       elseif id == "modules" then
         ui.drawFieldRow(i, "Show in Wingman", M.modsText(), { selected = sel, folder = true })
       else
@@ -147,24 +140,13 @@ return function(ctx)
   end
 
   function Screen.handleModel(e)
-    local m = M.model
-    if S.modelEditing then
-      local L = M.LIMITS.cells
-      if isNext(e) then m.cells = math.min(L.max, m.cells + 1)
-      elseif isPrev(e) then m.cells = math.max(L.min, m.cells - 1)
-      elseif isEnter(e) or isExit(e) then S.modelEditing = false end
-      return
-    end
     local rows = M.rows()
     local n = #rows
     S.modelCursor = ui.moveCursor(S.modelCursor, e, n + (M.isNew and 2 or 3))
     if isEnter(e) then
       local c = S.modelCursor
       local id = rows[c]
-      if id == "cells" then S.modelEditing = true
-      elseif id == "parallel" then m.parallel = not m.parallel
-      elseif id == "batteries" then S.assignItems, S.assignCursor, S.screen = M.assignItems(), 1, "assign"
-      elseif id == "sensors" then M.openSensors(); S.sensorCursor, S.screen = 1, "sensors"
+      if id == "battery" then S.batteryCursor, S.batteryEditing, S.screen = 1, false, "battery"
       elseif id == "modules" then S.modsCursor, S.screen = 1, "modules"
       elseif id == "logs" then
         if M.isActive then M.openLogs(); S.logsCursor, S.logsEditing, S.screen = 1, false, "logs" end
@@ -177,12 +159,66 @@ return function(ctx)
   end
 
   -- ---------------------------------------------------------------------------
+  -- Screen: battery page (Lipo Nanny's rows), stored with the model's Save
+  -- ---------------------------------------------------------------------------
+
+  local BATTERY_ROWS = M.BATTERY_ROWS
+
+  local function backToBattery(id)
+    for i, r in ipairs(BATTERY_ROWS) do if r == id then S.batteryCursor = i end end
+    S.screen = "battery"
+  end
+
+  local function leaveBattery() S.screen, S.modelCursor = "model", M.rowIndex("battery") end
+
+  function Screen.drawBattery()
+    local m = M.model
+    ui.drawHeader("BATTERY  " .. M.name(m.filename))
+    for i, id in ipairs(BATTERY_ROWS) do
+      local sel = S.batteryCursor == i
+      if id == "cells" then
+        ui.drawFieldRow(i, "Cells", m.cells .. "S", { selected = sel, editing = S.batteryEditing })
+      elseif id == "parallel" then
+        ui.drawFieldRow(i, "Parallel packs", m.parallel and "Yes" or "No", { selected = sel })
+      elseif id == "batteries" then
+        ui.drawFieldRow(i, "Batteries", #m.batteryIds .. " selected", { selected = sel, folder = true })
+      else
+        ui.drawFieldRow(i, "Sensors", M.sensorsAreCustom(m.sensors) and "custom" or "default",
+                        { selected = sel, folder = true })
+      end
+    end
+    ui.drawButtonBar({ "Back" }, #BATTERY_ROWS + 1, S.batteryCursor)
+  end
+
+  function Screen.handleBattery(e)
+    local m = M.model
+    if S.batteryEditing then
+      local L = M.LIMITS.cells
+      if isNext(e) then m.cells = math.min(L.max, m.cells + 1)
+      elseif isPrev(e) then m.cells = math.max(L.min, m.cells - 1)
+      elseif isEnter(e) or isExit(e) then S.batteryEditing = false end
+      return
+    end
+    S.batteryCursor = ui.moveCursor(S.batteryCursor, e, #BATTERY_ROWS + 1)
+    if isEnter(e) then
+      local id = BATTERY_ROWS[S.batteryCursor]
+      if id == "cells" then S.batteryEditing = true
+      elseif id == "parallel" then m.parallel = not m.parallel
+      elseif id == "batteries" then S.assignItems, S.assignCursor, S.screen = M.assignItems(), 1, "assign"
+      elseif id == "sensors" then M.openSensors(); S.sensorCursor, S.screen = 1, "sensors"
+      else leaveBattery() end
+    elseif isExit(e) then
+      leaveBattery()
+    end
+  end
+
+  -- ---------------------------------------------------------------------------
   -- Screen: battery assignment (profiles of the model's cell count)
   -- ---------------------------------------------------------------------------
 
   local function applyAssign()
     M.applyAssign(S.assignItems)
-    S.screen, S.modelCursor = "model", M.rowIndex("batteries")
+    backToBattery("batteries")
   end
 
   function Screen.drawAssign()
@@ -221,7 +257,7 @@ return function(ctx)
   -- Screen: sensor mapping
   -- ---------------------------------------------------------------------------
 
-  local function leaveSensors() S.screen, S.modelCursor = "model", M.rowIndex("sensors") end
+  local function leaveSensors() backToBattery("sensors") end
 
   -- Help lines for the focused row, above the button bar.
   local function drawHelp(desc)
@@ -403,6 +439,7 @@ return function(ctx)
       return
     end
     if S.screen == "model" then Screen.drawModel()
+    elseif S.screen == "battery" then Screen.drawBattery()
     elseif S.screen == "assign" then Screen.drawAssign()
     elseif S.screen == "sensors" then Screen.drawSensors()
     elseif S.screen == "modules" then Screen.drawModules()
@@ -414,6 +451,7 @@ return function(ctx)
   function P.handle(e)
     if M.broken then return isExit(e) or isEnter(e) end
     if S.screen == "model" then Screen.handleModel(e)
+    elseif S.screen == "battery" then Screen.handleBattery(e)
     elseif S.screen == "assign" then Screen.handleAssign(e)
     elseif S.screen == "sensors" then Screen.handleSensors(e)
     elseif S.screen == "modules" then Screen.handleModules(e)

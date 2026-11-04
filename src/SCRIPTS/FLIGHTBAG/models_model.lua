@@ -160,15 +160,18 @@ return function(ctx)
     for _, f in ipairs(SENSOR_FIELDS) do orig.sensors[f.key] = mod.sensors[f.key] end
   end
 
-  -- Editor rows of the installed apps; Lipo Nanny's first.
+  -- Rows of the model page by installed app; Lipo Nanny's lead to the battery page.
   function M.rows()
-    local r = cfg and { "cells", "parallel", "batteries", "sensors" } or {}
+    local r = cfg and { "battery" } or {}
     if wcfg then r[#r + 1] = "modules" end
     r[#r + 1] = "logs"
     return r
   end
 
-  -- Editor row number of a row id.
+  -- Rows of the battery page.
+  M.BATTERY_ROWS = { "cells", "parallel", "batteries", "sensors" }
+
+  -- Row number of a row id on the model page.
   function M.rowIndex(id)
     for i, r in ipairs(M.rows()) do if r == id then return i end end
     return 1
@@ -188,6 +191,11 @@ return function(ctx)
   end
 
   function M.dirty() return lipoDirty() or modsDirty() end
+
+  -- Value of the Battery row: "6S, 1 battery".
+  function M.batteryText()
+    return M.model.cells .. "S, " .. M.batteries(#M.model.batteryIds)
+  end
 
   function M.sensorsAreCustom(s)
     if not s then return false end
@@ -488,22 +496,35 @@ return function(ctx)
     return labels, ids
   end
 
+  -- Position that arms the model, from the FC modes Wingman stored for it; nil
+  -- when there are none or the position is not clear.
+  local function armFromFC()
+    local modes = wcfg and wcfg.modes and wcfg.modes[M.model.filename]
+    if not (modes and modes.ranges) then return nil end
+    local ok, idx = pcall(function()
+      return loadScript(wapp.base .. "switches.lua")().armPosition(modes.ranges)
+    end)
+    return ok and idx or nil
+  end
+
   -- Draft of the SD LOGS page: { exists, disabled (switched off in the model),
   -- noTrigger (the model's function has no switch), always (Always on instead
   -- of the arm switch), switch (arm switch, nil: not chosen yet; kept while
-  -- Always on is chosen), interval }. An interval set by hand outside the
-  -- page's range stays until it is changed; 0 (EdgeTX logs nothing) gets the
-  -- default.
+  -- Always on is chosen), preset (arm switch found from the FC modes while the
+  -- model has none; not a change of the draft), interval }. An interval set by
+  -- hand outside the page's range stays until it is changed; 0 (EdgeTX logs
+  -- nothing) gets the default.
   function M.openLogs()
     rereadLogs()
     local _, cf = findLogs()
     local v = cf and cf.value or 0
     local trig = cf and triggerOf(cf)
     local always = trig ~= nil and trig == onSwitch()
-    local arm = nil
+    local arm, preset = nil, nil
     if not always then arm = trig end
+    if not arm then preset = armFromFC(); arm = preset end
     M.logs = { exists = cf ~= nil, disabled = cf ~= nil and cf.active == 0,
-               noTrigger = cf ~= nil and not trig, always = always, switch = arm,
+               noTrigger = cf ~= nil and not trig, always = always, switch = arm, preset = preset,
                interval = v > 0 and v or LOG_INTERVAL.default }
   end
 
@@ -544,8 +565,8 @@ return function(ctx)
   -- True when the draft differs from the model's function.
   function M.logsDirty()
     local _, cf = findLogs()
-    if not cf then return draftSwitch() ~= nil or M.logs.interval ~= LOG_INTERVAL.default end
-    return draftSwitch() ~= triggerOf(cf) or M.logs.interval ~= cf.value
+    if not cf then return draftSwitch() ~= M.logs.preset or M.logs.interval ~= LOG_INTERVAL.default end
+    return draftSwitch() ~= (triggerOf(cf) or M.logs.preset) or M.logs.interval ~= cf.value
   end
 
   -- One step within the page's range (a longer interval set by hand comes
