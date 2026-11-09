@@ -14,6 +14,9 @@
 local A = {}
 
 A.BASE      = "/SCRIPTS/FLIGHTBAG/"
+-- Interface version of this file and the page logic (*_model.lua) for programs that run them
+-- outside the radio, such as a computer app: { breaking, additive }.
+A.API       = { 1, 0 }
 local API_MAJOR = 1          -- core interface the tools understand: { 1, >= 0 }
 local HEAD_MAX  = 2048       -- VERSION, API and CONFIG_PATH sit within this many bytes
 local FIRST     = "WINGMAN"  -- listed first
