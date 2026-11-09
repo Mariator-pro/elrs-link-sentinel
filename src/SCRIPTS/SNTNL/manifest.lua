@@ -49,8 +49,9 @@ return function(core)
       rec    = { label = "Link recovered", hint = "Link back after a loss in flight (off by default)" },
     },
 
+    -- id never changes once released: other programs recognise a reset by it, not by its label
     resets = {
-      { label = "Reset settings", ask = "Reset Link Sentinel settings to factory defaults?",
+      { id = "settings", label = "Reset settings", ask = "Reset Link Sentinel settings to factory defaults?",
         run = core.resetSettings },
     },
   }
