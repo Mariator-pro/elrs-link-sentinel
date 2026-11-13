@@ -20,8 +20,8 @@ return {
     on = "Ein", off = "Aus", mixed = "Gemischt", default = "Standard",
     mixedHint = "Die Apps haben verschiedene Werte, wähle neu",
     noConfig = "Noch keine Einstellungsdatei", create = "Anlegen",
-    damaged = "Einstellungsdatei beschädigt", reset = "Zurücksetzen",
-    resetAsk = "Die beschädigte Einstellungsdatei durch die Werkseinstellungen ersetzen?",
+    damaged = "Einstellungsdatei beschädigt", reset = "Neu anlegen",
+    resetAsk = "Die beschädigte Einstellungsdatei durch eine neue ersetzen? Ihr Inhalt geht verloren.",
   },
   sounds = { off = "Aus", default = "Standard" },
 
@@ -29,8 +29,8 @@ return {
     manufacturerRequired = "Gib einen Hersteller an.",
     lowAboveCritical = '"Akku niedrig" muss über "Akku kritisch" liegen.',
     lastPack = "Das ist der letzte Pack. Lösche stattdessen den Akku.",
-    parallelKeepTwo = "{models} nutzen zwei Packs parallel, deshalb behält der Akku mindestens 2.",
-    parallelUnassign = "{models} nutzen diesen Akku parallel. Nimm ihn dort zuerst heraus.",
+    parallelKeepTwo = "Parallel geflogen von {models}, deshalb behält der Akku mindestens 2 Packs.",
+    parallelUnassign = "Parallel geflogen von {models}. Nimm ihn dort zuerst heraus.",
     maxPacks = "Ein Akku hat höchstens {n} Packs.",
     deleteOne = "Akku löschen und seinen Pack archivieren?",
     deleteAll = "Akku löschen und alle {n} Packs archivieren?",
@@ -42,8 +42,8 @@ return {
     updateNeeded = "Update nötig: Diese Version läuft nicht mit diesem Flight Bag.",
     noConfig = "Noch keine Einstellungsdatei",
     damaged = "Einstellungsdatei beschädigt ({detail}).",
-    files = "Dateien", create = "Anlegen", reset = "Zurücksetzen",
-    resetAsk = "Die beschädigte Einstellungsdatei durch die Werkseinstellungen ersetzen?",
+    files = "Dateien", create = "Anlegen", reset = "Neu anlegen",
+    resetAsk = "Die beschädigte Einstellungsdatei durch eine neue ersetzen? Ihr Inhalt geht verloren.",
   },
 
   models = {

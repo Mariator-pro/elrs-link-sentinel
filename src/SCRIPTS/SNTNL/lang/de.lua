@@ -27,8 +27,8 @@ return {
     rec    = { label = "Verbindung wieder da", hint = "Verbindung nach einem Verlust im Flug zurück (ab Werk aus)" },
   },
   resets = {
-    settings = { label = "Einstellungen zurücksetzen", ask = "Einstellungen von Link Sentinel auf Werkseinstellungen zurücksetzen?",
-                 desc = "Link Sentinel bekommt wieder seine Werkseinstellungen." },
+    settings = { label = "Einstellungen zurücksetzen", ask = "Einstellungen von Link Sentinel zurücksetzen?",
+                 desc = "Alle Einstellungen von Link Sentinel bekommen wieder ihre Vorgaben, andere Daten speichert es nicht. Die Einstellungen für alle Apps (Töne, Vibration, Sprache) bleiben." },
   },
   setup = {
     damaged        = "Einstellungsdatei beschädigt",

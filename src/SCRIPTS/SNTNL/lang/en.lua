@@ -28,8 +28,8 @@ return {
     rec    = { label = "Link recovered", hint = "Link back after a loss in flight (off by default)" },
   },
   resets = {
-    settings = { label = "Reset settings", ask = "Reset Link Sentinel settings to factory defaults?",
-                 desc = "Link Sentinel goes back to its factory settings." },
+    settings = { label = "Reset settings", ask = "Reset Link Sentinel's settings?",
+                 desc = "All Link Sentinel settings go back to their defaults, it stores nothing else. The settings for all apps (Sounds, Vibration, Language) stay." },
   },
   setup = {
     damaged        = "Settings file damaged",

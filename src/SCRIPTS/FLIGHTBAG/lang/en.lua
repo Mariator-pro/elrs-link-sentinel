@@ -24,8 +24,8 @@ return {
     on = "On", off = "Off", mixed = "Mixed", default = "Default",
     mixedHint = "Set differently per script, choose again",
     noConfig = "No settings file yet", create = "Create",
-    damaged = "Settings file damaged", reset = "Reset",
-    resetAsk = "Replace the damaged settings file with factory settings?",
+    damaged = "Settings file damaged", reset = "Recreate",
+    resetAsk = "Replace the damaged settings file with a new one? Its content is lost.",
   },
   sounds = { off = "Off", default = "Default" },
 
@@ -34,8 +34,8 @@ return {
     manufacturerRequired = "Enter a manufacturer.",
     lowAboveCritical = "Battery low must be above Battery critical.",
     lastPack = "This is the last pack. Delete the battery instead.",
-    parallelKeepTwo = "{models} use two packs in parallel, so the battery keeps at least 2.",
-    parallelUnassign = "{models} use this battery in parallel. Remove it there first.",
+    parallelKeepTwo = "Flown in parallel by {models}, so the battery keeps at least 2 packs.",
+    parallelUnassign = "Flown in parallel by {models}. Remove it there first.",
     maxPacks = "A battery has at most {n} packs.",
     deleteOne = "Delete the battery and archive its pack?",
     deleteAll = "Delete the battery and archive all {n} packs?",
@@ -48,8 +48,8 @@ return {
     updateNeeded = "Update needed: this version does not work with this Flight Bag.",
     noConfig = "No settings file yet",
     damaged = "Settings file damaged ({detail}).",
-    files = "Files", create = "Create", reset = "Reset",
-    resetAsk = "Replace the damaged settings file with factory settings?",
+    files = "Files", create = "Create", reset = "Recreate",
+    resetAsk = "Replace the damaged settings file with a new one? Its content is lost.",
   },
 
   -- Models page: sensor rows and Wingman's module switches
