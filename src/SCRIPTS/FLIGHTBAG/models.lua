@@ -12,6 +12,14 @@
 
 return function(ctx)
   local ui = ctx.ui
+  local lib = ctx.lib
+  local function t(id, values) return lib.t("ui", id, values) end
+  -- Button labels for a list of action ids.
+  local function labels(ids)
+    local out = {}
+    for i, id in ipairs(ids) do out[i] = t(id) end
+    return out
+  end
   local M = loadScript("/SCRIPTS/FLIGHTBAG/models_model.lua")()(ctx)
   local SENSOR_FIELDS, MODULES = M.SENSOR_FIELDS, M.MODULES
   local SENSOR_BACK = #SENSOR_FIELDS + 1
@@ -34,22 +42,22 @@ return function(ctx)
   -- ---------------------------------------------------------------------------
 
   function Screen.drawList()
-    ui.drawHeader("MODELS")
+    ui.drawHeader(lib.t("titles", "models"))
     local keys, active, addCurrent = M.list()
     if #keys == 0 and not active then
-      lcd.drawText(ui.COL1, ui.bodyY(1), "No models configured.", COLOR_THEME_PRIMARY1)
+      lcd.drawText(ui.COL1, ui.bodyY(1), t("noModels"), COLOR_THEME_PRIMARY1)
     else
       local start, last = ui.scrollWindow(S.cursor, #keys, 1)
       local row = 0
       for i = start, last do
         row = row + 1
         local k = keys[i]
-        ui.drawNavRow(row, M.name(k) .. (k == active and "   [active]" or ""), S.cursor == i, { folder = true })
+        ui.drawNavRow(row, M.name(k) .. (k == active and ("   " .. t("active")) or ""), S.cursor == i, { folder = true })
       end
       ui.drawScrollbar(LCD_W - ui.PAD - 3, ui.bodyY(1), last - start + 1, start, #keys)
     end
-    local actions = { "Back" }
-    if addCurrent then actions[2] = "[+] Add current model" end
+    local actions = { t("back") }
+    if addCurrent then actions[2] = t("addCurrent") end
     ui.drawButtonBar(actions, #keys + 1, S.cursor)
   end
 
@@ -77,19 +85,19 @@ return function(ctx)
 
   function Screen.drawModel()
     local m = M.model
-    ui.drawHeader((M.isNew and "ADD MODEL  " or "EDIT MODEL  ") .. M.name(m.filename))
+    ui.drawHeader(t(M.isNew and "titleAddModel" or "titleEditModel", { name = M.name(m.filename) }))
     local rows = M.rows()
     for i, id in ipairs(rows) do
       local sel = S.modelCursor == i
       if id == "battery" then
-        ui.drawFieldRow(i, "Battery", M.batteryText(), { selected = sel, folder = true })
+        ui.drawFieldRow(i, t("battery"), M.batteryText(), { selected = sel, folder = true })
       elseif id == "modules" then
-        ui.drawFieldRow(i, "Show in Wingman", M.modsText(), { selected = sel, folder = true })
+        ui.drawFieldRow(i, t("showInWingman"), M.modsText(), { selected = sel, folder = true })
       else
-        ui.drawFieldRow(i, "SD logs", M.logsText(), { selected = sel, folder = M.isActive, disabled = not M.isActive })
+        ui.drawFieldRow(i, t("sdLogs"), M.logsText(), { selected = sel, folder = M.isActive, disabled = not M.isActive })
       end
     end
-    ui.drawButtonBar(M.isNew and { "Back", "Save" } or { "Back", "Save", "Delete" }, #rows + 1, S.modelCursor)
+    ui.drawButtonBar(labels(M.isNew and { "back", "save" } or { "back", "save", "delete" }), #rows + 1, S.modelCursor)
   end
 
   local function leaveModel() S.screen, S.cursor = "list", 1 end
@@ -101,7 +109,7 @@ return function(ctx)
 
   local function checkParallelSave()
     if M.parallelInvalid() then
-      ui.openAlert("Parallel mode needs a profile with 2+ packs")
+      ui.openAlert(lib.t("rules", "parallelNeedsTwo"))
       return
     end
     finishModelSave()
@@ -112,14 +120,14 @@ return function(ctx)
   local function proceedModelSave()
     local dropped = M.smallProfiles()
     if dropped == 0 then return checkParallelSave() end
-    ui.openDialog("Parallel mode unassigns " .. M.batteries(dropped) .. " with < 2 packs. Continue?",
+    ui.openDialog(t("parallelDrop", { batteries = M.batteries(dropped) }),
                   function() M.dropSmallProfiles(); checkParallelSave() end)
   end
 
   local function saveModel()
     local invalid = M.otherCells()
     if invalid > 0 then
-      ui.openDialog("Changing cells unassigns " .. M.batteries(invalid) .. ". Continue?", function()
+      ui.openDialog(t("cellsDrop", { batteries = M.batteries(invalid) }), function()
         M.dropOtherCells()
         proceedModelSave()
       end)
@@ -129,14 +137,14 @@ return function(ctx)
   end
 
   local function deleteModel()
-    ui.openDialog("Delete model config for " .. M.name(M.model.filename) .. "?", function()
+    ui.openDialog(t("deleteModel", { name = M.name(M.model.filename) }), function()
       local lipo, wing = M.delete()
       save(leaveModel, lipo, wing)
     end)
   end
 
   local function cancelModel()
-    if M.dirty() then ui.openDialog("Discard changes?", leaveModel) else leaveModel() end
+    if M.dirty() then ui.openDialog(t("discard"), leaveModel) else leaveModel() end
   end
 
   function Screen.handleModel(e)
@@ -173,21 +181,21 @@ return function(ctx)
 
   function Screen.drawBattery()
     local m = M.model
-    ui.drawHeader("BATTERY  " .. M.name(m.filename))
+    ui.drawHeader(t("titleBattery", { name = M.name(m.filename) }))
     for i, id in ipairs(BATTERY_ROWS) do
       local sel = S.batteryCursor == i
       if id == "cells" then
-        ui.drawFieldRow(i, "Cells", m.cells .. "S", { selected = sel, editing = S.batteryEditing })
+        ui.drawFieldRow(i, t("cells"), m.cells .. "S", { selected = sel, editing = S.batteryEditing })
       elseif id == "parallel" then
-        ui.drawFieldRow(i, "Parallel packs", m.parallel and "Yes" or "No", { selected = sel })
+        ui.drawFieldRow(i, t("parallelPacks"), t(m.parallel and "yes" or "no"), { selected = sel })
       elseif id == "batteries" then
-        ui.drawFieldRow(i, "Batteries", #m.batteryIds .. " selected", { selected = sel, folder = true })
+        ui.drawFieldRow(i, t("batteries"), t("selected", { n = #m.batteryIds }), { selected = sel, folder = true })
       else
-        ui.drawFieldRow(i, "Sensors", M.sensorsAreCustom(m.sensors) and "custom" or "default",
+        ui.drawFieldRow(i, t("sensors"), t(M.sensorsAreCustom(m.sensors) and "custom" or "default"),
                         { selected = sel, folder = true })
       end
     end
-    ui.drawButtonBar({ "Back" }, #BATTERY_ROWS + 1, S.batteryCursor)
+    ui.drawButtonBar(labels({ "back" }), #BATTERY_ROWS + 1, S.batteryCursor)
   end
 
   function Screen.handleBattery(e)
@@ -223,10 +231,9 @@ return function(ctx)
 
   function Screen.drawAssign()
     local m = M.model
-    ui.drawHeader(m.parallel and ("SELECT " .. m.cells .. "S PARALLEL PROFILES")
-                  or ("SELECT " .. m.cells .. "S BATTERIES"))
+    ui.drawHeader(t(m.parallel and "titleSelectParallel" or "titleSelect", { cells = m.cells }))
     if #S.assignItems == 0 then
-      lcd.drawText(ui.COL1, ui.bodyY(1), "No matching profiles.", COLOR_THEME_PRIMARY1)
+      lcd.drawText(ui.COL1, ui.bodyY(1), t("noMatching"), COLOR_THEME_PRIMARY1)
     end
     local start, last = ui.scrollWindow(S.assignCursor, #S.assignItems, 1)
     local row = 0
@@ -236,7 +243,7 @@ return function(ctx)
       ui.drawNavRow(row, (it.checked and "[x] " or "[ ] ") .. it.name, S.assignCursor == i,
                     { disabled = not it.selectable })
     end
-    ui.drawButtonBar({ "Back" }, #S.assignItems + 1, S.assignCursor)
+    ui.drawButtonBar(labels({ "back" }), #S.assignItems + 1, S.assignCursor)
   end
 
   function Screen.handleAssign(e)
@@ -259,10 +266,11 @@ return function(ctx)
 
   local function leaveSensors() backToBattery("sensors") end
 
-  -- Help lines for the focused row, above the button bar.
-  local function drawHelp(desc)
+  -- Help for the focused row, wrapped to the page width, above the button bar.
+  local function drawHelp(text)
     local _, smH = lcd.sizeText("Mg", SMLSIZE)
     local pitch = smH + 4
+    local desc = ui.wrapText(text, LCD_W - 2 * ui.COL1 - smH - 4, SMLSIZE)
     local dy = ui.barTopY() - #desc * pitch - 4
     for j, line in ipairs(desc) do
       local ly = dy + (j - 1) * pitch
@@ -272,7 +280,7 @@ return function(ctx)
   end
 
   function Screen.drawSensors()
-    ui.drawHeader("SENSORS  " .. M.name(M.model.filename))
+    ui.drawHeader(t("titleSensors", { name = M.name(M.model.filename) }))
     local _, smH = lcd.sizeText("Mg", SMLSIZE)
     local pitch  = smH + 4
     local y = ui.bodyY(1)
@@ -282,19 +290,19 @@ return function(ctx)
       y = y + ui.LINE
     end
     if M.isActive then
-      drawHelp(SENSOR_FIELDS[math.min(S.sensorCursor, #SENSOR_FIELDS)].desc)
+      drawHelp(SENSOR_FIELDS[math.min(S.sensorCursor, #SENSOR_FIELDS)].hint)
     else
-      lcd.drawText(ui.COL1, ui.barTopY() - pitch - 4, "Activate this model to edit sensors.",
+      lcd.drawText(ui.COL1, ui.barTopY() - pitch - 4, t("activateToEdit"),
                    COLOR_THEME_PRIMARY1 + SMLSIZE)
     end
-    ui.drawButtonBar(M.sensorsResetShown() and { "Back", "Reset to CRSF defaults" } or { "Back" },
+    ui.drawButtonBar(labels(M.sensorsResetShown() and { "back", "resetSensors" } or { "back" }),
                      SENSOR_BACK, S.sensorCursor)
   end
 
   local function openSensorPicker(c)
     local f = SENSOR_FIELDS[c]
-    local labels, cur = M.sensorChoices(f)
-    ui.openPicker(f.unit and f.label or (f.label .. " sensor"), labels, cur, function(i) M.setSensor(f, i) end)
+    local choices, cur = M.sensorChoices(f)
+    ui.openPicker(f.unit and f.label or t("sensorPicker", { label = f.label }), choices, cur, function(i) M.setSensor(f, i) end)
   end
 
   function Screen.handleSensors(e)
@@ -322,12 +330,12 @@ return function(ctx)
 
   function Screen.drawModules()
     local keys = M.moduleKeys()
-    ui.drawHeader("SHOW IN WINGMAN  " .. M.name(M.model.filename))
+    ui.drawHeader(t("titleShowInWingman", { name = M.name(M.model.filename) }))
     for i, k in ipairs(keys) do
-      ui.drawFieldRow(i, MODULES[k].label, M.model.mods[k] and "On" or "Off", { selected = S.modsCursor == i })
+      ui.drawFieldRow(i, MODULES[k].label, lib.t("rows", M.model.mods[k] and "on" or "off"), { selected = S.modsCursor == i })
     end
-    drawHelp(MODULES[keys[math.min(S.modsCursor, #keys)]].desc)
-    ui.drawButtonBar({ "Back" }, #keys + 1, S.modsCursor)
+    drawHelp(MODULES[keys[math.min(S.modsCursor, #keys)]].hint)
+    ui.drawButtonBar(labels({ "back" }), #keys + 1, S.modsCursor)
   end
 
   function Screen.handleModules(e)
@@ -351,50 +359,51 @@ return function(ctx)
   local function logsRows() return M.logs.always and 2 or 3 end
 
   local function logsButtons()
-    if M.logs.exists then return { "Back", "Apply", "Remove" } end
-    return { "Back", "Set up" }
+    if M.logs.exists then return labels({ "back", "apply", "remove" }) end
+    return labels({ "back", "setUp" })
   end
 
   function Screen.drawLogs()
-    ui.drawHeader("SD LOGS  " .. M.name(M.model.filename))
+    ui.drawHeader(t("titleLogs", { name = M.name(M.model.filename) }))
     local rows = logsRows()
-    ui.drawFieldRow(1, "Log", M.LOG_MODES[M.logsMode()], { selected = S.logsCursor == 1, popup = true })
+    ui.drawFieldRow(1, t("log"), M.LOG_MODES[M.logsMode()], { selected = S.logsCursor == 1, popup = true })
     if rows == 3 then
-      ui.drawFieldRow(2, "Arm switch", M.logsArm(), { selected = S.logsCursor == 2, popup = true })
+      ui.drawFieldRow(2, t("armSwitch"), M.logsArm(), { selected = S.logsCursor == 2, popup = true })
     end
-    ui.drawFieldRow(rows, "Interval", M.intervalText(M.logs.interval),
+    ui.drawFieldRow(rows, t("interval"), M.intervalText(M.logs.interval),
                     { selected = S.logsCursor == rows, editing = S.logsEditing })
+    -- Help line: the selected row's; on the buttons the one of the notice below the rows.
+    local c = S.logsCursor
+    local help = (c == 1 and "logHint") or (c == rows and "intervalHint") or (c == 2 and "armSwitchHint") or nil
     local y = ui.bodyY(rows + 1)
     if M.logs.noTrigger then
-      lcd.drawText(ui.COL1, y, "No trigger in the model", COLOR_THEME_WARNING)
-      drawHelp({ "Without a switch EdgeTX never logs.", "Choose the arm switch and Apply." })
+      lcd.drawText(ui.COL1, y, t("noTrigger"), COLOR_THEME_WARNING)
+      help = help or "noTriggerHelp"
     elseif M.logs.disabled then
-      lcd.drawText(ui.COL1, y, "Disabled in the model", COLOR_THEME_WARNING)
-      drawHelp({ "The special function is switched off.", "Apply switches it on again." })
+      lcd.drawText(ui.COL1, y, t("disabled"), COLOR_THEME_WARNING)
+      help = help or "disabledHelp"
     elseif M.logs.exists then
       local found, total = M.logSensors()
       if total > 0 and found < total then
-        lcd.drawText(ui.COL1, y, "Log sensors: " .. found .. " of " .. total .. " found",
-                     COLOR_THEME_WARNING)
-        drawHelp({ "Open Model > Telemetry and select", "Discover new sensors while the apps run." })
+        lcd.drawText(ui.COL1, y, t("logSensorsSome", { found = found, total = total }), COLOR_THEME_WARNING)
+        help = help or "discoverHelp"
       elseif total > 0 then
-        lcd.drawText(ui.COL1, y, "Log sensors: all " .. total .. " found", COLOR_THEME_PRIMARY1)
+        lcd.drawText(ui.COL1, y, t("logSensorsAll", { total = total }), COLOR_THEME_PRIMARY1)
       end
-    else
-      drawHelp({ "Armed: one log file per flight.", "Always on: from power-on to power-off." })
     end
+    if help then drawHelp(t(help)) end
     ui.drawButtonBar(logsButtons(), rows + 1, S.logsCursor)
   end
 
   local function applyLogs()
     local ok, err = M.applyLogs()
     if ok then leaveLogs()
-    elseif err == "switch" then ui.openAlert("Choose the arm switch first.")
-    else ui.openAlert("No free special function. Remove one in the model.") end
+    elseif err == "switch" then ui.openAlert(t("chooseArmFirst"))
+    else ui.openAlert(t("noFreeSlot")) end
   end
 
   local function cancelLogs()
-    if M.logsDirty() then ui.openDialog("Discard changes?", leaveLogs) else leaveLogs() end
+    if M.logsDirty() then ui.openDialog(t("discard"), leaveLogs) else leaveLogs() end
   end
 
   function Screen.handleLogs(e)
@@ -409,15 +418,15 @@ return function(ctx)
     if isEnter(e) then
       local c = S.logsCursor
       if c == 1 then
-        ui.openPicker("Log", M.LOG_MODES, M.logsMode(), function(i) M.setLogsMode(i) end)
+        ui.openPicker(t("log"), M.LOG_MODES, M.logsMode(), function(i) M.setLogsMode(i) end)
       elseif c == rows then S.logsEditing = true
       elseif c == 2 then
-        local labels, cur, ids = M.logsArmChoices()
-        ui.openPicker("Arm switch", labels, cur, function(i) M.setLogsArm(ids[i]) end)
+        local choices, cur, ids = M.logsArmChoices()
+        ui.openPicker(t("armSwitch"), choices, cur, function(i) M.setLogsArm(ids[i]) end)
       elseif c == rows + 1 then cancelLogs()
       elseif c == rows + 2 then applyLogs()
       else
-        ui.openDialog("Remove SD logs from this model?", function() M.removeLogs(); leaveLogs() end)
+        ui.openDialog(t("removeLogs"), function() M.removeLogs(); leaveLogs() end)
       end
     elseif isExit(e) then
       cancelLogs()
@@ -432,10 +441,10 @@ return function(ctx)
 
   function P.draw()
     if M.broken then
-      ui.drawHeader("MODELS")
-      lcd.drawText(ui.COL1, ui.bodyY(1), "Lipo Nanny has no usable settings file.", COLOR_THEME_WARNING)
-      lcd.drawText(ui.COL1, ui.bodyY(2), "Fix it in the Lipo Nanny app (start page).", COLOR_THEME_PRIMARY1)
-      ui.drawButtonBar({ "Back" }, 1, 1)
+      ui.drawHeader(lib.t("titles", "models"))
+      lcd.drawText(ui.COL1, ui.bodyY(1), t("lipoBroken"), COLOR_THEME_WARNING)
+      lcd.drawText(ui.COL1, ui.bodyY(2), t("lipoBrokenFix"), COLOR_THEME_PRIMARY1)
+      ui.drawButtonBar(labels({ "back" }), 1, 1)
       return
     end
     if S.screen == "model" then Screen.drawModel()

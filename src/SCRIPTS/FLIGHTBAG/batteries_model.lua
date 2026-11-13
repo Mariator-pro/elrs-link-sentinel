@@ -33,6 +33,7 @@ local Buy = {
 
 return function(ctx)
   local lib = ctx.lib
+  local t = lib.t
   local app
   for _, a in ipairs(ctx.apps) do if a.folder == "LIPONY" then app = a end end
   local core = app and app.core
@@ -207,8 +208,8 @@ return function(ctx)
   -- The question before deleting the profile, for both views.
   function M.deleteQuestion()
     local n = M.packsBefore()
-    if n == 1 then return "Delete profile and archive its pack?" end
-    return "Delete profile and archive all " .. n .. " packs?"
+    if n == 1 then return t("rules", "deleteOne") end
+    return t("rules", "deleteAll", { n = n })
   end
 
   -- Name (field 1) or manufacturer (field 2) as typed; trailing spaces go. An
@@ -242,7 +243,7 @@ return function(ctx)
   function M.pct(key) return M.prof[key] or cfg[key] end
   function M.pctText(key)
     local p = M.prof
-    return p[key] and (p[key] .. " %") or (cfg[key] .. " % (default)")
+    return p[key] and (p[key] .. " %") or t("ui", "pctDefault", { v = cfg[key] })
   end
   function M.setPct(key, v)
     local p = M.prof
@@ -258,10 +259,10 @@ return function(ctx)
 
   -- Why the pack can't be archived, or nil.
   function M.archiveLocked()
-    if #M.prof.instances <= 1 then return "Last pack - delete the profile instead" end
+    if #M.prof.instances <= 1 then return t("rules", "lastPack") end
     local names = parallelModelsUsing(M.prof.id)
     if #names > 0 and (#M.prof.instances - 1) < 2 then
-      return "Used by parallel model(s) " .. table.concat(names, ", ") .. " - keep 2+ packs"
+      return t("rules", "parallelKeepTwo", { models = table.concat(names, ", ") })
     end
     return nil
   end
@@ -272,7 +273,7 @@ return function(ctx)
   -- Adds a pack; returns a message when the profile is full.
   function M.addPack()
     local packs = M.prof.instances
-    if #packs >= MAX_PACKS then return "Max " .. MAX_PACKS .. " packs" end
+    if #packs >= MAX_PACKS then return t("rules", "maxPacks", { n = MAX_PACKS }) end
     packs[#packs + 1] = { id = nil, label = nextLabel(packs), wear = 0, cycles = 0 }
     sortByLabel(packs)
   end
@@ -288,9 +289,9 @@ return function(ctx)
   -- Why the profile can't be saved, or nil.
   function M.invalid()
     local p = M.prof
-    if p.manufacturer == "" then return "Manufacturer required" end
+    if p.manufacturer == "" then return t("rules", "manufacturerRequired") end
     if p.warnPct and p.critPct and not (p.warnPct > p.critPct) then
-      return "Battery low must be above Battery critical"
+      return t("rules", "lowAboveCritical")
     end
     return nil
   end
@@ -321,7 +322,7 @@ return function(ctx)
   -- Why the profile can't be deleted, or nil.
   function M.deleteBlocked()
     local names = parallelModelsUsing(M.prof.id)
-    if #names > 0 then return "Used by parallel model(s) " .. table.concat(names, ", ") .. ". Unassign first" end
+    if #names > 0 then return t("rules", "parallelUnassign", { models = table.concat(names, ", ") }) end
     return nil
   end
 

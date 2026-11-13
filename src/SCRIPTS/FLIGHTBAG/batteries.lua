@@ -27,6 +27,14 @@ end
 
 return function(ctx)
   local ui = ctx.ui
+  local lib = ctx.lib
+  local function t(id, values) return lib.t("ui", id, values) end
+  -- Button labels for a list of action ids.
+  local function labels(ids)
+    local out = {}
+    for i, id in ipairs(ids) do out[i] = t(id) end
+    return out
+  end
   local M = loadScript("/SCRIPTS/FLIGHTBAG/batteries_model.lua")()(ctx)
   local TEXT_MAX, Buy = M.TEXT_MAX, M.Buy
 
@@ -52,10 +60,10 @@ return function(ctx)
   -- ---------------------------------------------------------------------------
 
   function Screen.drawList()
-    ui.drawHeader("BATTERIES")
+    ui.drawHeader(lib.t("titles", "batteries"))
     local items = M.sorted()
     if #items == 0 then
-      lcd.drawText(ui.COL1, ui.bodyY(1), "No batteries yet - add your first.", COLOR_THEME_PRIMARY1)
+      lcd.drawText(ui.COL1, ui.bodyY(1), t("noBatteries"), COLOR_THEME_PRIMARY1)
     else
       local start, last = ui.scrollWindow(S.cursor, #items, 1)
       local row = 0
@@ -65,7 +73,7 @@ return function(ctx)
       end
       ui.drawScrollbar(LCD_W - ui.PAD - 3, ui.bodyY(1), last - start + 1, start, #items)
     end
-    ui.drawButtonBar({ "Back", "[+] Add new" }, #items + 1, S.cursor)
+    ui.drawButtonBar(labels({ "back", "addNew" }), #items + 1, S.cursor)
   end
 
   function Screen.handleList(e)
@@ -98,22 +106,23 @@ return function(ctx)
     local function field(item, label, value, folder)
       lines[#lines + 1] = { item = item, label = label, value = value, folder = folder }
     end
-    field(1, "Name", p.name .. (p.nameAuto and "  (auto)" or ""))
-    field(2, "Manufacturer", p.manufacturer ~= "" and p.manufacturer or "-")
-    field(3, "Chemistry", p.chemistry)
-    field(4, "Capacity", p.capacityMah .. " mAh")
-    field(5, "Cells", p.cells .. "S")
-    field(6, "Packs", tostring(#p.instances), true)
-    field(7, "Statistics", nil, true)
-    field(8, "Battery low", M.pctText("warnPct"))
-    field(9, "Battery critical", M.pctText("critPct"))
+    field(1, t("name"), p.name .. (p.nameAuto and ("  " .. t("auto")) or ""))
+    field(2, t("manufacturer"), p.manufacturer ~= "" and p.manufacturer or "-")
+    field(3, t("chemistry"), p.chemistry)
+    field(4, t("capacity"), p.capacityMah .. " mAh")
+    field(5, t("cells"), p.cells .. "S")
+    field(6, t("packs"), tostring(#p.instances), true)
+    field(7, t("statistics"), nil, true)
+    field(8, t("batteryLow"), M.pctText("warnPct"))
+    field(9, t("batteryCritical"), M.pctText("critPct"))
     return lines
   end
 
+  -- Ids of the bottom-bar buttons.
   local function profileActions()
-    local acts = { "Back", "Save" }
-    if not M.isNew then acts[#acts + 1] = "Delete" end
-    if not M.prof.nameAuto then acts[#acts + 1] = "Reset name" end
+    local acts = { "back", "save" }
+    if not M.isNew then acts[#acts + 1] = "delete" end
+    if not M.prof.nameAuto then acts[#acts + 1] = "resetName" end
     return acts
   end
 
@@ -178,14 +187,14 @@ return function(ctx)
       else toks[#toks + 1] = { s = c, f = COLOR_THEME_PRIMARY1 } end
     end
     if not S.textCharMode and n < S.textMax and pos == n + 1 then toks[#toks + 1] = { s = "[_]", f = INV } end
-    for _, t in ipairs(toks) do t.w = lcd.sizeText(t.s) end
+    for _, tok in ipairs(toks) do tok.w = lcd.sizeText(tok.s) end
     local rightEdge = LCD_W - ui.PAD
     if not S.textCharMode then
-      local clearW = lcd.sizeText("Clear") + 2 * ui.BTN_PADX
-      ui.drawButton(rightEdge - clearW, y - 2, "Clear", pos == textClearIndex())
+      local clearW = lcd.sizeText(t("clear")) + 2 * ui.BTN_PADX
+      ui.drawButton(rightEdge - clearW, y - 2, t("clear"), pos == textClearIndex())
       rightEdge = rightEdge - clearW - ui.PAD
-      local doneW = lcd.sizeText("Done") + 2 * ui.BTN_PADX
-      ui.drawButton(rightEdge - doneW, y - 2, "Done", pos == textDoneIndex())
+      local doneW = lcd.sizeText(t("done")) + 2 * ui.BTN_PADX
+      ui.drawButton(rightEdge - doneW, y - 2, t("done"), pos == textDoneIndex())
       rightEdge = rightEdge - doneW - ui.PAD
     end
     if #toks == 0 then return end
@@ -212,16 +221,16 @@ return function(ctx)
   end
 
   local function drawTextEditor()
-    ui.drawHeader(S.profEditing == 2 and "EDIT MANUFACTURER" or "EDIT NAME")
+    ui.drawHeader(t(S.profEditing == 2 and "titleEditManufacturer" or "titleEditName"))
     local y = ui.bodyY(1)
     drawEditValue(y)
     if S.textCharMode then
       local ch = (S.textPos > #S.textBuf) and " " or string.sub(S.textBuf, S.textPos, S.textPos)
       drawCharRing(ch)
-      ui.drawKeyHint(y, "MDL", "switch group")
+      ui.drawKeyHint(y, "MDL", t("switchGroup"))
     else
-      local hx = ui.drawKeyChip(ui.COL1, ui.bodyY(2), "Wheel", "slot") + ui.PAD * 2
-      ui.drawKeyChip(hx, ui.bodyY(2), "ENTER", "edit")
+      local hx = ui.drawKeyChip(ui.COL1, ui.bodyY(2), t("wheel"), t("slot")) + ui.PAD * 2
+      ui.drawKeyChip(hx, ui.bodyY(2), t("enter"), t("edit"))
     end
   end
 
@@ -319,7 +328,7 @@ return function(ctx)
 
   function Screen.drawProfile()
     if S.profEditing == 1 or S.profEditing == 2 then drawTextEditor(); return end
-    ui.drawHeader(M.isNew and "ADD BATTERY" or "EDIT BATTERY")
+    ui.drawHeader(t(M.isNew and "titleAddBattery" or "titleEditBattery"))
     local lines = buildProfileLines()
     local focus = #lines
     for i, ln in ipairs(lines) do if ln.item == S.profCursor then focus = i break end end
@@ -332,9 +341,9 @@ return function(ctx)
       if ln.item == S.profEditing then editY, editVal = ui.bodyY(row), ln.value end
     end
     ui.drawScrollbar(LCD_W - ui.PAD - 3, ui.bodyY(1), last - start + 1, start, #lines)
-    ui.drawButtonBar(profileActions(), 10, S.profCursor)
+    ui.drawButtonBar(labels(profileActions()), 10, S.profCursor)
     if editY and S.profEditing == 4 then
-      ui.drawKeyHint(editY, "MDL", "step " .. S.capStep, editVal and (ui.COL2 + lcd.sizeText(editVal)))
+      ui.drawKeyHint(editY, "MDL", t("step", { n = S.capStep }), editVal and (ui.COL2 + lcd.sizeText(editVal)))
     end
   end
 
@@ -358,7 +367,7 @@ return function(ctx)
 
   local function cancelProfile()
     if not M.dirty() then gotoList()
-    else ui.openDialog("Discard changes?", gotoList) end
+    else ui.openDialog(t("discard"), gotoList) end
   end
 
   function Screen.handleProfile(e)
@@ -376,10 +385,10 @@ return function(ctx)
       elseif c == 7 then S.statsCursor, S.screen = 1, "stats"
       else
         local act = profileActions()[c - 9]
-        if act == "Save" then saveProfile()
-        elseif act == "Back" then cancelProfile()
-        elseif act == "Delete" then deleteProfile()
-        elseif act == "Reset name" then
+        if act == "save" then saveProfile()
+        elseif act == "back" then cancelProfile()
+        elseif act == "delete" then deleteProfile()
+        elseif act == "resetName" then
           M.resetName()
           S.profCursor = 1
         end
@@ -402,14 +411,14 @@ return function(ctx)
   end
 
   function Screen.drawPacks()
-    ui.drawHeader("PACKS - " .. M.prof.name)
+    ui.drawHeader(t("titlePacks", { name = M.prof.name }))
     local packs, C = M.prof.instances, COLOR_THEME_PRIMARY1
     local hy = ui.bodyY(1)
-    lcd.drawText(PK.id,   hy, "ID",     C + BOLD)
-    lcd.drawText(PK.cyc,  hy, "Cycles", C + BOLD)
-    lcd.drawText(PK.wear, hy, "Wear",   C + BOLD)
-    lcd.drawText(PK.buy,  hy, "Bought", C + BOLD)
-    lcd.drawText(PK.act,  hy, "Delete", C + BOLD)
+    lcd.drawText(PK.id,   hy, t("colId"),     C + BOLD)
+    lcd.drawText(PK.cyc,  hy, t("colCycles"), C + BOLD)
+    lcd.drawText(PK.wear, hy, t("colWear"),   C + BOLD)
+    lcd.drawText(PK.buy,  hy, t("colBought"), C + BOLD)
+    lcd.drawText(PK.act,  hy, t("colDelete"), C + BOLD)
     local n = #packs
     local start, last = ui.scrollWindow(S.packsCursor, n, 2)
     local dispRow = 1
@@ -433,7 +442,7 @@ return function(ctx)
       ui.drawButton(PK.act, y - 2, "X", dived and S.packSub == "archive")
     end
     ui.drawScrollbar(LCD_W - ui.PAD - 3, ui.bodyY(2), last - start + 1, start, n)
-    ui.drawButtonBar({ "Back", "[+] Add pack" }, #packs + 1, S.packsCursor)
+    ui.drawButtonBar(labels({ "back", "addPack" }), #packs + 1, S.packsCursor)
   end
 
   function Screen.handlePacks(e)
@@ -494,14 +503,14 @@ return function(ctx)
   -- ---------------------------------------------------------------------------
 
   function Screen.drawStats()
-    ui.drawHeader("STATISTICS - " .. M.prof.name)
+    ui.drawHeader(t("titleStats", { name = M.prof.name }))
     local packs, C = M.prof.instances, COLOR_THEME_PRIMARY1
     local hy = ui.bodyY(1)
-    lcd.drawText(SX.id,   hy, "ID",        C + BOLD)
-    lcd.drawText(SX.cyc,  hy, "Cycles",    C + BOLD)
-    lcd.drawText(SX.mah,  hy, "Life mAh",  C + BOLD)
-    lcd.drawText(SX.vmin, hy, "Vmin",      C + BOLD)
-    lcd.drawText(SX.last, hy, "Last used", C + BOLD)
+    lcd.drawText(SX.id,   hy, t("colId"),       C + BOLD)
+    lcd.drawText(SX.cyc,  hy, t("colCycles"),   C + BOLD)
+    lcd.drawText(SX.mah,  hy, t("colLifeMah"),  C + BOLD)
+    lcd.drawText(SX.vmin, hy, t("colVmin"),     C + BOLD)
+    lcd.drawText(SX.last, hy, t("colLastUsed"), C + BOLD)
     local n = #packs
     local start, last = ui.scrollWindow(S.statsCursor, n, 2)
     local dispRow = 1
@@ -516,7 +525,7 @@ return function(ctx)
       lcd.drawText(SX.last, y, p.lastUsed or "-", C)
     end
     ui.drawScrollbar(LCD_W - ui.PAD - 3, ui.bodyY(2), last - start + 1, start, n)
-    ui.drawButtonBar({ "Back" }, n + 1, S.statsCursor)
+    ui.drawButtonBar(labels({ "back" }), n + 1, S.statsCursor)
   end
 
   function Screen.handleStats(e)
@@ -533,10 +542,10 @@ return function(ctx)
 
   function P.draw()
     if M.broken then
-      ui.drawHeader("BATTERIES")
-      lcd.drawText(ui.COL1, ui.bodyY(1), "Lipo Nanny has no usable settings file.", COLOR_THEME_WARNING)
-      lcd.drawText(ui.COL1, ui.bodyY(2), "Fix it in the Lipo Nanny app (start page).", COLOR_THEME_PRIMARY1)
-      ui.drawButtonBar({ "Back" }, 1, 1)
+      ui.drawHeader(lib.t("titles", "batteries"))
+      lcd.drawText(ui.COL1, ui.bodyY(1), t("lipoBroken"), COLOR_THEME_WARNING)
+      lcd.drawText(ui.COL1, ui.bodyY(2), t("lipoBrokenFix"), COLOR_THEME_PRIMARY1)
+      ui.drawButtonBar(labels({ "back" }), 1, 1)
       return
     end
     if S.screen == "profile" then Screen.drawProfile()

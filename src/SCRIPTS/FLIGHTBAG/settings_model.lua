@@ -41,8 +41,9 @@ end
 
 return function(ctx)
   local id = ctx.id
+  local t = ctx.lib.t
   local M = {
-    rows    = {},      -- { kind = "shared"|"head"|"fix"|"field"|"sound", ... }
+    rows    = {},      -- { kind = "shared"|"head"|"fix"|"field"|"sound", ... }; a fix row: fix = "create"|"reset"
     touched = false,   -- a value changed since the page opened
   }
   local blocks = {}   -- per app: { app, man, core, cfg, err, v = values, snd = sounds }
@@ -95,15 +96,15 @@ return function(ctx)
   end
 
   local function formatValue(b, f, val)
-    if val == nil then return "Mixed" end
-    if f.type == "bool" then return val and "On" or "Off" end
+    if val == nil then return t("rows", "mixed") end
+    if f.type == "bool" then return t("rows", val and "on" or "off") end
     if f.type == "choice" then
       for i, c in ipairs(f.choices or {}) do
         if c == val then return (f.labels and f.labels[i]) or tostring(c) end
       end
       return tostring(val)
     end
-    if f.off ~= nil and val == f.off then return "Off" end
+    if f.off ~= nil and val == f.off then return t("rows", "off") end
     local u = unitOf(b, f)
     return (f.prefix or "") .. tostring(val) .. (u and (" " .. u) or "")
   end
@@ -171,9 +172,10 @@ return function(ctx)
         add({ kind = "head", text = nameOf(b), top = #rows > 0 })
       end
       if b.err == "missing" then
-        add({ kind = "fix", block = b, text = "No settings file yet", button = "Create" })
+        add({ kind = "fix", block = b, fix = "create", text = t("rows", "noConfig"), button = t("rows", "create") })
       elseif b.err then
-        add({ kind = "fix", block = b, text = "Settings file damaged", button = "Reset" })
+        add({ kind = "fix", block = b, fix = "reset", text = t("rows", "damaged"), button = t("rows", "reset"),
+              ask = t("rows", "resetAsk") })
       else
         for _, f in ipairs(own) do add({ kind = "field", block = b, field = f }) end
         for _, key in ipairs(sounds) do
@@ -232,7 +234,7 @@ return function(ctx)
   function M.hintOf(r)
     if not r then return nil end
     if r.kind == "shared" and shared[r.key].value == nil then
-      return "Set differently per script, choose again"
+      return t("rows", "mixedHint")
     end
     local h = r.hint or (r.field and r.field.hint)
     if not h then return nil end
@@ -265,7 +267,7 @@ return function(ctx)
     if b.opts then return b.opts end
     local core, skip = b.core, {}
     for _, name in pairs(core.SOUND_DEFAULTS or {}) do skip[name] = true end
-    local opts = { { label = "Off", name = false }, { label = "Default", name = nil } }
+    local opts = { { label = t("sounds", "off"), name = false }, { label = t("sounds", "default"), name = nil } }
     for _, fname in ipairs(listWavs(string.gsub(core.SOUND_DIR, "/$", ""), skip)) do
       opts[#opts + 1] = { label = fname, name = fname }
     end
@@ -346,7 +348,7 @@ return function(ctx)
           cfg.sounds = cfg.sounds or {}
           for _, key in ipairs(b.core.SOUND_KEYS or {}) do cfg.sounds[key] = b.snd[key] end
           if not b.core.saveConfig(cfg) then
-            problems[#problems + 1] = nameOf(b) .. ": save failed, check SD card"
+            problems[#problems + 1] = t("rules", "saveFailed", { app = nameOf(b) })
           end
         end
       end

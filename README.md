@@ -139,7 +139,8 @@ Take the SD card out of the radio (or connect the radio via USB as mass storage)
 SCRIPTS/
 ├── SNTNL/
 │   ├── core.lua            ← shared logic
-│   └── manifest.lua        ← Flight Bag settings
+│   ├── manifest.lua        ← Flight Bag settings
+│   └── lang/               ← Flight Bag texts (English, German)
 ├── FUNCTIONS/
 │   └── sntnl.lua           ← function script
 ├── FLIGHTBAG/              ← Flight Bag pages

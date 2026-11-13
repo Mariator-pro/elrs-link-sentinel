@@ -11,37 +11,12 @@
 -- Copyright (C) 2026 Mariator-pro
 -- =====================================================================
 
--- Sensor rows; `desc` is the help for the row (what it does, values).
-local SENSOR_FIELDS = {
-  { key = "voltage",  label = "Voltage", desc = {
-      "Whole-pack voltage (V). Sets SoC % and",
-      "warnings. 4S full ~16.8V, empty ~14.0V." } },
-  { key = "current",  label = "Current", desc = {
-      "Live current draw (A). Feeds the",
-      "remaining-time estimate, e.g. 0-120A." } },
-  { key = "capacity", label = "Capacity", desc = {
-      "Consumed mAh, counts UP from 0 (or %,",
-      "see Capacity unit). Main warn trigger." } },
-  -- Not a sensor name: how the Capacity sensor reports (nil = mAh used, "pct").
-  { key = "capacityUnit", label = "Capacity unit",
-    unit = { "mAh used (default)", "% remaining" }, desc = {
-      "Only if the FC sends remaining %.",
-      "FC capacity must equal the pack's mAh." } },
-}
-
--- Wingman's module switches: label and help. Off also stops that module's
--- alerts in Wingman.
-local MODULES = {
-  lipo = { label = "Battery", desc = {
-      "Battery column, pack selection and",
-      "Lipo Nanny alerts. Off: none of them." } },
-  link = { label = "Link", desc = {
-      "Link column and Link Sentinel alerts.",
-      "Off: no link values, no link alerts." } },
-  gps  = { label = "GPS", desc = {
-      "GPS column, search page and GPS Homer",
-      "alerts. Off: no GPS values or alerts." } },
-}
+-- Sensor rows and Wingman's module switches by key; their label and help come
+-- from the language file. capacityUnit is not a sensor name: how the Capacity
+-- sensor reports (nil = mAh used, "pct"). A module switched off also stops
+-- that module's alerts in Wingman.
+local SENSOR_KEYS = { "voltage", "current", "capacity", "capacityUnit" }
+local MODULE_KEYS = { "lipo", "link", "gps" }
 
 -- Telemetry sensors each app's core sets for the flight log (its LOG_SENSORS),
 -- with the Wingman module that drives it. Named here so the page needs no core.
@@ -59,6 +34,19 @@ local LOG_INTERVAL = { min = 1, max = 50, default = 5 }
 
 return function(ctx)
   local lib = ctx.lib
+  local function t(id, values) return lib.t("ui", id, values) end
+
+  -- A row of the page: { key, label, hint (its help), desc (the help as lines) }.
+  local function row(key)
+    local hint = lib.text("models", key, "hint")
+    return { key = key, label = lib.text("models", key, "label") or key, hint = hint, desc = { hint } }
+  end
+  local SENSOR_FIELDS, MODULES = {}, {}
+  for i, key in ipairs(SENSOR_KEYS) do SENSOR_FIELDS[i] = row(key) end
+  SENSOR_FIELDS[#SENSOR_FIELDS].unit = { lib.text("models", "capacityUnit", "choices", "mah"),
+                                         lib.text("models", "capacityUnit", "choices", "pct") }
+  for _, key in ipairs(MODULE_KEYS) do MODULES[key] = row(key) end
+
   local app, wapp
   for _, a in ipairs(ctx.apps) do
     if a.folder == "LIPONY" then app = a elseif a.folder == "WINGMAN" then wapp = a end
@@ -81,7 +69,7 @@ return function(ctx)
 
   function M.moduleKeys() return wcore.MODULES end
   function M.name(k) return lib.modelName(k) end
-  function M.batteries(n) return n .. (n == 1 and " battery" or " batteries") end
+  function M.batteries(n) return t(n == 1 and "oneBattery" or "manyBatteries", { n = n }) end
 
   local function profileById(id)
     for _, b in ipairs(cfg.batteries) do if b.id == id then return b end end
@@ -212,7 +200,7 @@ return function(ctx)
     for _, k in ipairs(wcore.MODULES) do
       if M.model.mods[k] then on[#on + 1] = MODULES[k].label end
     end
-    return #on > 0 and table.concat(on, ", ") or "None"
+    return #on > 0 and table.concat(on, ", ") or lib.t("models", "none")
   end
 
   -- ---------------------------------------------------------------------------
@@ -366,13 +354,13 @@ return function(ctx)
     local v = M.model.sensors[f.key]
     if f.unit then return f.unit[v == "pct" and 2 or 1] end
     if v and v ~= "" then return v end
-    return DEFAULT_SENSORS[f.key] .. " (default)"
+    return t("sensorDefault", { name = DEFAULT_SENSORS[f.key] })
   end
 
   -- Choice labels of a sensor row and the index of its value.
   function M.sensorChoices(f)
     if f.unit then return f.unit, M.model.sensors[f.key] == "pct" and 2 or 1 end
-    local labels, cur = { DEFAULT_SENSORS[f.key] .. " (default)" }, 1
+    local labels, cur = { t("sensorDefault", { name = DEFAULT_SENSORS[f.key] }) }, 1
     for i = 2, #sensorOpts do
       labels[i] = sensorOpts[i]
       if sensorOpts[i] == M.model.sensors[f.key] then cur = i end
@@ -443,7 +431,7 @@ return function(ctx)
   end
 
   local function switchName(idx)
-    if idx == onSwitch() then return "Always on" end
+    if idx == onSwitch() then return t("alwaysOn") end
     local n = getSwitchName and getSwitchName(idx)
     return n or ("#" .. idx)
   end
@@ -454,11 +442,11 @@ return function(ctx)
   -- Text of the "SD logs" row: "Off", "No trigger", "SF↓, 0.5 s", "Always on,
   -- 0.5 s"; ", disabled" when the function is switched off in the model.
   function M.logsText()
-    if not M.isActive then return "Only for the active model" end
+    if not M.isActive then return t("onlyActive") end
     local _, cf = findLogs()
-    if not cf then return "Off" end
-    if not triggerOf(cf) then return "No trigger" end
-    return switchName(cf.switch) .. ", " .. intervalText(cf.value or 0) .. (cf.active == 0 and ", disabled" or "")
+    if not cf then return lib.t("rows", "off") end
+    if not triggerOf(cf) then return t("noTriggerShort") end
+    return switchName(cf.switch) .. ", " .. intervalText(cf.value or 0) .. (cf.active == 0 and t("disabledSuffix") or "")
   end
 
   -- Position symbols EdgeTX appends to a physical switch's name (up, down).
@@ -534,7 +522,7 @@ return function(ctx)
     return M.logs.switch
   end
 
-  M.LOG_MODES = { "Armed", "Always on" }
+  M.LOG_MODES = { t("armed"), t("alwaysOn") }
 
   -- Index of the draft's kind in LOG_MODES.
   function M.logsMode() return M.logs.always and 2 or 1 end
@@ -544,7 +532,7 @@ return function(ctx)
   -- Arm switch text of the draft.
   function M.logsArm()
     local s = M.logs.switch
-    if not s then return "Choose arm switch" end
+    if not s then return t("chooseArm") end
     return switchName(s)
   end
 

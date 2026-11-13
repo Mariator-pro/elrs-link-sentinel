@@ -25,6 +25,9 @@
 
 local U = {}
 
+-- Text of the ui area by id; the tool sets it to the language lookup.
+U.t = function(id) return id end
+
 U.PAD  = 6
 -- Row pitch. The screen-height fraction is only a load-time fallback (sizeText is
 -- not valid until a frame runs); measure() raises it to the real font height on
@@ -276,7 +279,7 @@ end
 
 function U.openDialog(text, onYes, yesLabel, noLabel)
   U.dialog = { text = text, onYes = onYes, cursor = 2,   -- default to the safe answer
-               yes = yesLabel or "Yes", no = noLabel or "No" }
+               yes = yesLabel or U.t("yes"), no = noLabel or U.t("no") }
 end
 
 function U.openAlert(text) U.dialog = { text = text, alert = true } end
@@ -318,8 +321,8 @@ local function drawDialog()
   end
   local btnY = y + h - LINE - PAD
   if d.alert then
-    local okW = lcd.sizeText("OK") + 2 * U.BTN_PADX
-    U.drawButton(math.floor((LCD_W - okW) / 2), btnY, "OK", true)
+    local okW = lcd.sizeText(U.t("ok")) + 2 * U.BTN_PADX
+    U.drawButton(math.floor((LCD_W - okW) / 2), btnY, U.t("ok"), true)
   else
     U.drawButton(x + PAD * 2,                 btnY, d.yes, d.cursor == 1)
     U.drawButton(x + math.floor(w / 2) + PAD, btnY, d.no,  d.cursor == 2)
@@ -428,8 +431,8 @@ function U.withRetry(writeFn, onDone)
   if writeFn() then
     if onDone then onDone() end
   else
-    U.openDialog("Save failed. Check SD card.",
-                 function() U.withRetry(writeFn, onDone) end, "Retry", "Cancel")
+    U.openDialog(U.t("saveFailed"),
+                 function() U.withRetry(writeFn, onDone) end, U.t("retry"), U.t("cancel"))
   end
 end
 

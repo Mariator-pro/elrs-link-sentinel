@@ -14,6 +14,8 @@ local QR_QUIET = 4   -- modules of light margin the scanner needs on each side
 
 return function(ctx)
   local ui = ctx.ui
+  local lib = ctx.lib
+  local function t(id, values) return lib.t("ui", id, values) end
   local M = loadScript("/SCRIPTS/FLIGHTBAG/flights_model.lua")()(ctx)
   local flights = M.flights
   local idx = 1
@@ -45,7 +47,7 @@ return function(ctx)
     local mod  = qrModule()
     local runs = mod and runsFor(entry)
     if not runs then
-      lcd.drawText(x0, y0, "No QR code", COLOR_THEME_DISABLED)
+      lcd.drawText(x0, y0, t("noQr"), COLOR_THEME_DISABLED)
       return
     end
     local scale = math.max(1, math.floor(box / (mod.SIZE + 2 * QR_QUIET)))
@@ -63,14 +65,15 @@ return function(ctx)
   local P = {}
 
   function P.draw()
-    ui.drawHeader("LAST FLIGHTS")
+    ui.drawHeader(lib.t("titles", "flights"))
     local COL1, PAD = ui.COL1, ui.PAD
     local n = #flights
     if n == 0 then
-      lcd.drawText(COL1, ui.bodyY(1), "No flight logged yet.", COLOR_THEME_PRIMARY1)
-      lcd.drawText(COL1, ui.bodyY(2), "A position is stored when the", COLOR_THEME_DISABLED)
-      lcd.drawText(COL1, ui.bodyY(3), "telemetry ends after a flight.", COLOR_THEME_DISABLED)
-      ui.drawButtonBar({ "Back" }, 1, 1)
+      lcd.drawText(COL1, ui.bodyY(1), t("noFlights"), COLOR_THEME_PRIMARY1)
+      for i, line in ipairs(ui.wrapText(t("noFlightsHint"), math.floor(LCD_W * 0.6))) do
+        lcd.drawText(COL1, ui.bodyY(i + 1), line, COLOR_THEME_DISABLED)
+      end
+      ui.drawButtonBar({ t("back") }, 1, 1)
       return
     end
     local entry = flights[idx]
@@ -84,19 +87,20 @@ return function(ctx)
     if n > 1 then
       -- Key hint beside the counter, dropped when it would run into the QR code.
       local hintX = COL1 + lcd.sizeText(counter) + PAD * 2
-      local hintW = lcd.sizeText("ROLLER") + 8 + lcd.sizeText("older / newer")
-      if hintX + hintW <= qrX - PAD then ui.drawKeyChip(hintX, ui.bodyY(1), "ROLLER", "older / newer") end
+      local hintW = lcd.sizeText(t("roller")) + 8 + lcd.sizeText(t("olderNewer"))
+      if hintX + hintW <= qrX - PAD then ui.drawKeyChip(hintX, ui.bodyY(1), t("roller"), t("olderNewer")) end
     end
     lcd.drawText(COL1, ui.bodyY(2), stamp, COLOR_THEME_PRIMARY1)
     if entry.model ~= "" then lcd.drawText(COL1, ui.bodyY(3), entry.model, COLOR_THEME_PRIMARY1) end
-    lcd.drawText(COL1, ui.bodyY(4), "LAST POSITION", COLOR_THEME_DISABLED)
+    lcd.drawText(COL1, ui.bodyY(4), t("lastPosition"), COLOR_THEME_DISABLED)
     -- LAT / LON labels, the values on one edge
-    local vx = COL1 + math.max(lcd.sizeText("LAT "), lcd.sizeText("LON "))
-    lcd.drawText(COL1, ui.bodyY(5), "LAT ", COLOR_THEME_DISABLED)
+    local lat, lon = t("lat") .. " ", t("lon") .. " "
+    local vx = COL1 + math.max(lcd.sizeText(lat), lcd.sizeText(lon))
+    lcd.drawText(COL1, ui.bodyY(5), lat, COLOR_THEME_DISABLED)
     lcd.drawText(vx, ui.bodyY(5), M.coord(entry.lat), COLOR_THEME_PRIMARY1)
-    lcd.drawText(COL1, ui.bodyY(6), "LON ", COLOR_THEME_DISABLED)
+    lcd.drawText(COL1, ui.bodyY(6), lon, COLOR_THEME_DISABLED)
     lcd.drawText(vx, ui.bodyY(6), M.coord(entry.lon), COLOR_THEME_PRIMARY1)
-    ui.drawButtonBar({ "Back" }, 1, 1)
+    ui.drawButtonBar({ t("back") }, 1, 1)
   end
 
   -- Returns true to close the page.

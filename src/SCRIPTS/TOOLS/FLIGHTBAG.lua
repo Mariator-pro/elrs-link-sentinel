@@ -6,7 +6,8 @@
 -- Start page: topic menu on top, the installed apps (every /SCRIPTS/<NAME>/
 -- with a core.lua) as a strip of icons below it. A page gathers the settings
 -- of all apps on one topic; each app describes itself in its manifest.lua.
--- Tapping an app opens its About data and resets.
+-- Tapping an app opens its About data and resets. The texts come from
+-- lang/<code>.lua in the language the apps' setting Language names.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
@@ -46,6 +47,10 @@ if not (ui and A) then
   return { run = run }
 end
 
+-- Flight Bag's own texts (area ui) by id.
+local function t(id, values) return A.t("ui", id, values) end
+ui.t = t
+
 -- Page file per topic page.
 local FILES = { warnings = "settings.lua", alerts = "settings.lua", batteries = "batteries.lua",
                 models = "models.lua", flights = "flights.lua", display = "settings.lua" }
@@ -61,30 +66,38 @@ local function openPage(p)
   local ok, mk = false, nil
   if chunk then ok, mk = pcall(chunk) end
   if not ok or type(mk) ~= "function" then
-    ui.openAlert(p.label .. " could not be started. Copy " .. BASE .. " to the SD card again.")
+    ui.openAlert(t("pageFailed", { page = p.label, path = BASE }))
     return
   end
   local pok, pg = pcall(mk, { ui = ui, lib = A, apps = A.pageApps(apps, p), allApps = apps, id = p.id, title = p.label })
   if pok and type(pg) == "table" then page = pg else A.unload(apps) end
 end
 
-local function closePage()
-  page = nil
+-- After a page or popup closed: the apps' warning signs, the language (it may
+-- have been chosen or reset) and with it the menu.
+local function refresh()
   A.unload(apps)
   A.refreshWarnings(apps)
+  A.setLang(A.sharedLang(apps))
+  menu = A.menu(apps)
+end
+
+local function closePage()
+  page = nil
+  refresh()
 end
 
 -- ---------------------------------------------------------------------------
 -- App popup: About data, file list and resets
 -- ---------------------------------------------------------------------------
 
-local function closePopup() pop = nil; A.unload(apps); A.refreshWarnings(apps) end
+local function closePopup() pop = nil; refresh() end
 
 local popupButtons
 
 -- Runs an action's write, reports the result and refreshes the buttons.
 local function runWrite(act)
-  ui.openAlert(A.runAction(apps, pop.app, act) and "Done." or "Save failed. Check SD card.")
+  ui.openAlert(t(A.runAction(apps, pop.app, act) and "saved" or "saveFailed"))
   pop.buttons = popupButtons(pop.app)
   pop.cursor  = math.min(pop.cursor, #pop.buttons)
 end
@@ -98,7 +111,7 @@ popupButtons = function(app)
       else runWrite(act) end
     end }
   end
-  b[#b + 1] = { label = "Close", act = closePopup }
+  b[#b + 1] = { label = t("close"), act = closePopup }
   return b
 end
 
@@ -111,8 +124,14 @@ end
 
 local function drawPopup()
   local app, LINE, PAD = pop.app, ui.LINE, ui.PAD
-  local lines = A.popupLines(app)
   local w = LCD_W - 4 * PAD
+  -- { text, warn, bold }: the popup's lines wrapped to the box, the title bold.
+  local lines = {}
+  for i, l in ipairs(A.popupLines(app)) do
+    local flags = i == 1 and BOLD or 0
+    local parts = lcd.sizeText(l[1], flags) > w - 2 * PAD and ui.wrapText(l[1], w - 2 * PAD, flags) or { l[1] }
+    for _, part in ipairs(parts) do lines[#lines + 1] = { part, l[2], i == 1 } end
+  end
   local _, th = lcd.sizeText("Mg")
   local btnH = th + 4
   -- Buttons wrap into rows that fit the box.
@@ -131,7 +150,7 @@ local function drawPopup()
   lcd.drawFilledRectangle(bx, by, w, h, COLOR_THEME_SECONDARY3)
   lcd.drawRectangle(bx, by, w, h, COLOR_THEME_SECONDARY1)
   for i, l in ipairs(lines) do
-    local flags = l[2] and COLOR_THEME_WARNING or (COLOR_THEME_PRIMARY1 + (i == 1 and BOLD or 0))
+    local flags = l[2] and COLOR_THEME_WARNING or (COLOR_THEME_PRIMARY1 + (l[3] and BOLD or 0))
     lcd.drawText(bx + PAD, by + PAD + (i - 1) * LINE, l[1], flags)
   end
   local y = by + 2 * PAD + #lines * LINE
@@ -263,10 +282,7 @@ end
 local function drawStart()
   ui.drawHeader(TITLE)
   if #apps == 0 then
-    local hint = { "No settings found.", "",
-                   "Flight Bag shows the settings of",
-                   "installed scripts. Copy a script to",
-                   "the SD card and open Flight Bag again." }
+    local hint = ui.wrapText(t("noApps"), math.floor(LCD_W * 0.7))
     for i, s in ipairs(hint) do lcd.drawText(ui.COL1, ui.bodyY(i), s, COLOR_THEME_PRIMARY1) end
   end
   for i, p in ipairs(menu) do
@@ -274,7 +290,7 @@ local function drawStart()
     lcd.drawText(x, y, "> " .. p.label, COLOR_THEME_PRIMARY1 + BOLD + (cursor == i and INVERS or 0))
   end
   if #apps > 0 then drawStrip() end
-  exitBox = ui.drawButtonBar({ "Exit" }, exitIndex(), cursor)[1]
+  exitBox = ui.drawButtonBar({ t("exit") }, exitIndex(), cursor)[1]
 end
 
 local function hit(b, x, y) return b and x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h end
@@ -306,6 +322,7 @@ end
 local function init()
   apps = A.scan()
   A.refreshWarnings(apps)
+  A.setLang(A.sharedLang(apps))
   menu = A.menu(apps)
   cursor = 1
 end
@@ -319,7 +336,7 @@ local function run(event, touchState)
     handlePopup(event)
   elseif page then
     local ok, done = pcall(page.handle, event, touchState)
-    if not ok then ui.openAlert("Error: " .. tostring(done)); closePage()
+    if not ok then ui.openAlert(t("pageError", { msg = tostring(done) })); closePage()
     elseif done then closePage() end
   else
     if event == EVT_VIRTUAL_EXIT then return 1 end
@@ -336,7 +353,7 @@ local function run(event, touchState)
   lcd.clear()
   if page then
     local ok, err = pcall(page.draw)
-    if not ok then ui.openAlert("Error: " .. tostring(err)); closePage(); lcd.clear(); drawStart() end
+    if not ok then ui.openAlert(t("pageError", { msg = tostring(err) })); closePage(); lcd.clear(); drawStart() end
   else
     drawStart()
   end

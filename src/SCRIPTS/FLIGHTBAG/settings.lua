@@ -11,6 +11,8 @@
 
 return function(ctx)
   local ui = ctx.ui
+  local lib = ctx.lib
+  local function t(id, values) return lib.t("ui", id, values) end
   local TEST_X = math.floor(LCD_W * 0.74)
   local M = loadScript("/SCRIPTS/FLIGHTBAG/settings_model.lua")()(ctx)
   local sel = {}             -- indices of the selectable rows
@@ -47,7 +49,7 @@ return function(ctx)
       lcd.drawText(ui.COL1, y, r.label, C + ((selected and not dived) and INVERS or 0))
       local vx  = ui.drawArrowBefore(ui.COL2, y, C)
       lcd.drawText(vx, y, M.soundLabels(r.block)[M.soundIndex(r)], C + ((dived == "snd") and INVERS or 0))
-      ui.drawButton(TEST_X, y - 2, "Play", dived == "test", M.isMuted(r) or r.off)
+      ui.drawButton(TEST_X, y - 2, t("play"), dived == "test", M.isMuted(r) or r.off)
     else
       local text, mixed = M.rowValue(r)
       local isEdit = selected and editing
@@ -61,7 +63,7 @@ return function(ctx)
 
   local function draw()
     local rows = M.rows
-    ui.drawHeader(string.upper(ctx.title))
+    ui.drawHeader(lib.t("titles", ctx.id))
     local LINE = ui.LINE
     local _, sh = lcd.sizeText("Mg", SMLSIZE)
     local hint  = M.hintOf(current())
@@ -69,7 +71,7 @@ return function(ctx)
     local top0   = ui.bodyY(1)
     local fit    = math.max(1, math.floor((bottom - top0) / LINE))
     if #rows == 0 then
-      lcd.drawText(ui.COL1, top0, "Nothing to set here.", COLOR_THEME_PRIMARY1)
+      lcd.drawText(ui.COL1, top0, t("nothing"), COLOR_THEME_PRIMARY1)
     end
     local focus = sel[cursor] or #rows
     local start = math.max(1, math.min(focus - math.floor(fit / 2), #rows - fit + 1))
@@ -79,7 +81,7 @@ return function(ctx)
     end
     if #rows > fit then ui.drawScrollbar(LCD_W - ui.PAD - 3, top0, fit, start, #rows) end
     if hint then ui.drawHint(hint) end
-    ui.drawButtonBar({ "Back", "Save" }, #sel + 1, cursor)
+    ui.drawButtonBar({ t("back"), t("save") }, #sel + 1, cursor)
   end
 
   -- ---------------------------------------------------------------------------
@@ -119,7 +121,7 @@ return function(ctx)
       dive = (dive == "snd" and not M.isMuted(r)) and "test" or "snd"
     elseif ui.isEnter(e) then
       if dive == "snd" then
-        ui.openPicker(r.label .. " sound", M.soundLabels(r.block), M.soundIndex(r),
+        ui.openPicker(t("soundPicker", { label = r.label }), M.soundLabels(r.block), M.soundIndex(r),
                       function(i) M.setSound(r, i) end)
       else
         M.playTest(r)
@@ -132,10 +134,10 @@ return function(ctx)
   local function fixFile(r)
     local function write() return M.fixWrite(r) end
     local function done() M.reload(r); refresh() end
-    if r.button == "Create" then
+    if r.fix == "create" then
       ui.withRetry(write, done)
     else
-      ui.openDialog("Replace the damaged settings file with factory settings?", function()
+      ui.openDialog(r.ask, function()
         ui.withRetry(write, done)
       end)
     end
@@ -164,7 +166,7 @@ return function(ctx)
     cursor = ui.moveCursor(cursor, e, count)
     if ui.isEnter(e) then
       if cursor == #sel + 1 then                      -- Back
-        if M.touched then ui.openDialog("Discard changes?", function() P.close = true end)
+        if M.touched then ui.openDialog(t("discard"), function() P.close = true end)
         else return true end
       elseif cursor == #sel + 2 then                  -- Save
         if save() then return true end
@@ -174,7 +176,7 @@ return function(ctx)
         else startEdit(r) end
       end
     elseif ui.isExit(e) then
-      if M.touched then ui.openDialog("Discard changes?", function() P.close = true end)
+      if M.touched then ui.openDialog(t("discard"), function() P.close = true end)
       else return true end
     end
     return P.close == true

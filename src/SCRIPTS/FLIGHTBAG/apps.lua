@@ -4,8 +4,10 @@
 -- SD card path: /SCRIPTS/FLIGHTBAG/apps.lua
 -- Finds the apps (every /SCRIPTS/<NAME>/ with a core.lua), loads and drops
 -- their core, manifest and config, describes the app popup (text lines and
--- actions) and names the models. No drawing: both Flight Bag tools show it
--- their own way; the pages get it as ctx.lib.
+-- actions), names the models and holds the language: Flight Bag's own texts
+-- (lang/<code>.lua) and the code the apps' manifests are asked for. No
+-- drawing: both Flight Bag tools show it their own way; the pages get it as
+-- ctx.lib.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
@@ -22,16 +24,90 @@ local HEAD_MAX  = 2048       -- VERSION, API and CONFIG_PATH sit within this man
 local FIRST     = "WINGMAN"  -- listed first
 
 -- Topic pages. `needs`: the page shows while one of these apps is installed;
--- `only` limits the page to them (otherwise every app takes part).
+-- `only` limits the page to them (otherwise every app takes part). `fields`:
+-- the page shows while an installed app has a field on it. `label` is set by
+-- A.setLang.
 local SETTINGS_APPS = { LIPONY = true, SNTNL = true, GPSHOMER = true }
 A.PAGES = {
-  { id = "warnings",  label = "Warnings",     needs = SETTINGS_APPS },
-  { id = "alerts",    label = "Alerts",       needs = SETTINGS_APPS },
-  { id = "batteries", label = "Batteries",    needs = { LIPONY = true }, only = true },
-  { id = "models",    label = "Models",       needs = { LIPONY = true, WINGMAN = true }, only = true },
-  { id = "flights",   label = "Last flights", needs = { GPSHOMER = true }, only = true },
-  { id = "display",   label = "Display",      needs = { WINGMAN = true, LIPONY = true } },
+  { id = "warnings",  needs = SETTINGS_APPS },
+  { id = "alerts",    needs = SETTINGS_APPS },
+  { id = "batteries", needs = { LIPONY = true }, only = true },
+  { id = "models",    needs = { LIPONY = true, WINGMAN = true }, only = true },
+  { id = "flights",   needs = { GPSHOMER = true }, only = true },
+  { id = "display",   needs = {}, fields = true },
 }
+
+-- ---------------------------------------------------------------------------
+-- Language: Flight Bag's texts by area and id, one file per language. A text
+-- missing in the chosen language comes from English, then its id is shown.
+-- ---------------------------------------------------------------------------
+
+A.LANGUAGES = { "en", "de" }
+A.lang = "en"
+local own, english   -- texts of A.lang (nil for English) and of English, loaded when first needed
+
+local function loadLang(code)
+  local chunk = loadScript(A.BASE .. "lang/" .. code .. ".lua")
+  local ok, t = false, nil
+  if chunk then ok, t = pcall(chunk) end
+  return ok and type(t) == "table" and t or {}
+end
+
+local function dig(t, a, b, c, d)
+  for _, k in ipairs({ a, b, c, d }) do
+    if type(t) ~= "table" then return nil end
+    t = t[k]
+  end
+  return t
+end
+
+-- The text at area, id (and part, key), or nil.
+function A.text(a, b, c, d)
+  local v = own and dig(own, a, b, c, d)
+  if v == nil then
+    english = english or loadLang("en")
+    v = dig(english, a, b, c, d)
+  end
+  return v
+end
+
+-- A text with its {name} placeholders filled from `values`.
+function A.fill(s, values)
+  return (string.gsub(s, "{(%w+)}", function(k)
+    local v = values and values[k]
+    if v ~= nil then return tostring(v) end
+  end))
+end
+
+-- The text of area and id with `values` filled in; the id when there is none.
+function A.t(area, id, values)
+  local s = A.text(area, id)
+  if type(s) ~= "string" then return id end
+  return values and A.fill(s, values) or s
+end
+
+-- Chooses the language (an unknown code is English) and names the pages in it.
+-- Apps already loaded keep their texts until they are loaded again.
+function A.setLang(code)
+  local lang = "en"
+  for _, c in ipairs(A.LANGUAGES) do if c == code then lang = c end end
+  A.lang = lang
+  own = lang ~= "en" and loadLang(lang) or nil
+  for _, p in ipairs(A.PAGES) do p.label = A.t("pages", p.id) end
+end
+
+-- The language the installed apps agree on (their setting `language`, kept
+-- from the last load); English while they differ or none has it.
+function A.sharedLang(apps)
+  local lang
+  for _, app in ipairs(apps) do
+    if app.language then
+      if lang and lang ~= app.language then return "en" end
+      lang = app.language
+    end
+  end
+  return lang or "en"
+end
 
 -- ---------------------------------------------------------------------------
 -- Scan
@@ -107,7 +183,9 @@ function A.menu(apps, ids)
   for _, p in ipairs(A.PAGES) do
     if not ids or ids[p.id] then
       for _, app in ipairs(apps) do
-        if app.ok and p.needs[app.folder] then menu[#menu + 1] = p; break end
+        if app.ok and (p.needs[app.folder] or (p.fields and A.fieldPages(app)[p.id])) then
+          menu[#menu + 1] = p; break
+        end
       end
     end
   end
@@ -117,6 +195,13 @@ end
 -- ---------------------------------------------------------------------------
 -- Loading an app (core, manifest, config) for a page or the popup
 -- ---------------------------------------------------------------------------
+
+-- The pages an app has fields on (a set), known from its last load; an app
+-- not loaded yet is loaded once for it.
+function A.fieldPages(app)
+  if not app.pages and app.ok and A.load(app) then A.unload({ app }) end
+  return app.pages or {}
+end
 
 function A.load(app)
   if app.core then return true end
@@ -129,7 +214,7 @@ function A.load(app)
   local core = load(app.base .. "core.lua")
   local mk   = core and load(app.base .. "manifest.lua")
   local ok, man = false, nil
-  if type(core) == "table" and type(mk) == "function" then ok, man = pcall(mk, core) end
+  if type(core) == "table" and type(mk) == "function" then ok, man = pcall(mk, core, A.lang) end
   if not ok or type(man) ~= "table" then
     app.loadError = true
     return false
@@ -138,10 +223,22 @@ function A.load(app)
   if core.loadConfig then
     app.cfg, app.err, app.errDetail = core.loadConfig()
   end
-  -- Setup errors of the active model, listed in the popup; app.warn (the
-  -- warning sign) outlives the unload.
-  app.setupErrs = nil
-  if type(core.setupErrors) == "function" then
+  -- Kept past the unload: the app's language setting and its pages with fields.
+  app.language = app.cfg and app.cfg.language or nil
+  app.pages = {}
+  for _, f in ipairs(man.fields or {}) do if f.page then app.pages[f.page] = true end end
+  -- Setup problems of the active model, listed in the popup: by id
+  -- (app.setupIssues) with their texts in the language, or as the sentences of
+  -- an older core. app.warn (the warning sign) outlives the unload.
+  app.setupErrs, app.setupIssues = nil, nil
+  if type(core.setupIssues) == "function" and type(core.texts) == "function" then
+    local sok, list = pcall(core.setupIssues)
+    if sok and type(list) == "table" and #list > 0 then
+      local T = core.texts(A.lang)
+      app.setupIssues, app.setupErrs = list, {}
+      for i, e in ipairs(list) do app.setupErrs[i] = core.fillText(T("setup", e.id) or e.id, e) end
+    end
+  elseif type(core.setupErrors) == "function" then
     local sok, list = pcall(core.setupErrors)
     if sok and type(list) == "table" and #list > 0 then app.setupErrs = list end
   end
@@ -153,7 +250,7 @@ end
 function A.unload(apps)
   for _, app in ipairs(apps) do
     app.core, app.man, app.cfg, app.err, app.errDetail, app.loadError = nil, nil, nil, nil, nil, nil
-    app.setupErrs = nil
+    app.setupErrs, app.setupIssues = nil, nil
     app.noConfig = app.ok and app.configPath ~= nil and not exists(app.configPath)
   end
   collectgarbage()
@@ -191,38 +288,38 @@ function A.popupLines(app)
   local function add(t, warn) lines[#lines + 1] = { t, warn } end
   local name = app.man and app.man.name or app.folder
   add(name .. (app.version and ("  v" .. app.version) or ""))
-  add("(c) Mariator-pro   GPL-2.0")
-  if app.man and app.man.url then add(app.man.url) end
+  local man = app.man or {}
+  add("(c) " .. (man.author or "Mariator-pro") .. "   " .. (man.license or "GPL-2.0"))
+  if man.url then add(man.url) end
   if not app.ok or app.loadError then
-    add("Update needed: this version does not work", true)
-    add("with this Flight Bag.", true)
+    add(A.t("popup", "updateNeeded"), true)
   elseif app.noConfig then
-    add("No settings file yet", true)
+    add(A.t("popup", "noConfig"), true)
   elseif app.err then
-    add("Settings file damaged (" .. tostring(app.err) .. ").", true)
+    add(A.t("popup", "damaged", { detail = tostring(app.err) }), true)
   elseif app.setupErrs then
     for _, e in ipairs(app.setupErrs) do add(e, true) end
   end
   return lines
 end
 
--- Popup actions of a loaded app: { label, rows } lists files (label/value
--- rows), { label, run, ask } runs a write after the question `ask` (none: at
--- once). run returns true on success.
+-- Popup actions of a loaded app: { id, label, rows } lists files (label/value
+-- rows), { id, label, run, ask } runs a write after the question `ask` (none:
+-- at once). run returns true on success. id: "files", "create", "reset" or
+-- the id of the manifest's reset.
 function A.popupActions(app)
   local b = {}
   if not (app.ok and app.man) then return b end
-  b[#b + 1] = { label = "Files", rows = app.man.paths or {} }
+  b[#b + 1] = { id = "files", label = A.t("popup", "files"), rows = app.man.paths or {} }
   local core = app.core
   local function factory() return core.saveConfig(core.defaultConfig()) end
   if app.noConfig then
-    b[#b + 1] = { label = "Create", run = factory }
+    b[#b + 1] = { id = "create", label = A.t("popup", "create"), run = factory }
   elseif app.err then
-    b[#b + 1] = { label = "Reset", run = factory,
-                  ask = "Replace the damaged settings file with factory settings?" }
+    b[#b + 1] = { id = "reset", label = A.t("popup", "reset"), run = factory, ask = A.t("popup", "resetAsk") }
   else
     for _, r in ipairs(app.man.resets or {}) do
-      b[#b + 1] = { label = r.label, run = r.run, ask = r.ask }
+      b[#b + 1] = { id = r.id, label = r.label, run = r.run, ask = r.ask, desc = r.desc }
     end
   end
   return b
@@ -266,5 +363,7 @@ function A.activeModel()
   if ok and type(info) == "table" then return info.filename end
   return nil
 end
+
+A.setLang("en")
 
 return A

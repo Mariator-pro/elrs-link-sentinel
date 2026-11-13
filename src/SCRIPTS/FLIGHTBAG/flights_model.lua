@@ -21,7 +21,7 @@ return function(ctx)
   function M.stamp(entry)
     local stamp = entry.date
     if entry.time ~= "" then stamp = (stamp == "" and entry.time) or (stamp .. "  " .. entry.time) end
-    if stamp == "" then stamp = "no clock" end
+    if stamp == "" then stamp = ctx.lib.t("ui", "noClock") end
     return stamp
   end
 

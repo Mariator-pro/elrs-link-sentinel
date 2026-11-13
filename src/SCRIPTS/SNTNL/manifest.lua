@@ -2,57 +2,72 @@
 -- manifest.lua  --  Link Sentinel as seen by the Flight Bag settings tool
 -- =====================================================================
 -- SD card path: /SCRIPTS/SNTNL/manifest.lua
--- Loaded only by the settings tool. Labels and hints live here; ranges,
+-- Loaded only by the settings tool. Fields, sounds, resets and files by id;
+-- their texts come from lang/<code>.lua (lang: "en" when left out). Ranges,
 -- defaults, sound slots and the config file live in core.lua.
 -- =====================================================================
 -- SPDX-License-Identifier: GPL-2.0-only
 -- Copyright (C) 2026 Mariator-pro
 -- =====================================================================
 
-return function(core)
+return function(core, lang)
   local L, D = core.LIMITS, core.DEFAULTS
-  return {
-    name  = "Link Sentinel",
-    url   = "github.com/Mariator-pro/elrs-link-sentinel",
+  local T = core.texts(lang)
+  local man = {
+    name    = "Link Sentinel",
+    author  = "Mariator-pro",
+    license = "GPL-2.0",
+    url     = "github.com/Mariator-pro/elrs-link-sentinel",
+    -- ids never change once released: other programs recognise an entry by it
     paths = {
-      { "Core",   "/SCRIPTS/SNTNL/core.lua" },
-      { "Config", core.CONFIG_PATH },
-      { "Widget", "/WIDGETS/SNTNL/main.lua" },
-      { "Func",   "/SCRIPTS/FUNCTIONS/sntnl.lua" },
-      { "Sounds", core.SOUND_DIR },
+      { id = "core",   path = "/SCRIPTS/SNTNL/core.lua" },
+      { id = "config", path = core.CONFIG_PATH },
+      { id = "widget", path = "/WIDGETS/SNTNL/main.lua" },
+      { id = "func",   path = "/SCRIPTS/FUNCTIONS/sntnl.lua" },
+      { id = "sounds", path = core.SOUND_DIR },
     },
 
     fields = {
-      { key = "warnOffsetDb", page = "warnings", label = "Link quality low",
+      { key = "warnOffsetDb", page = "warnings",
         min = L.warnOffsetDb.min, max = L.warnOffsetDb.max, step = L.warnOffsetDb.step,
-        default = D.warnOffsetDb, prefix = "+", unit = "dB",
-        hint = "Early warning %v before the RSSI limit (1RSS/2RSS)" },
-      { key = "rqlyThreshold", page = "warnings", label = "Link quality critical",
+        default = D.warnOffsetDb, prefix = "+", unit = "dB" },
+      { key = "rqlyThreshold", page = "warnings",
         min = L.rqlyThreshold.min, max = L.rqlyThreshold.max, step = L.rqlyThreshold.step,
-        default = D.rqlyThreshold, unit = "%",
-        hint = "Critical alert when RQly drops below %v" },
-      { key = "audio", page = "alerts", label = "Sounds", shared = true,
-        type = "bool", default = D.audio, hint = "Off silences every announcement, vibration stays" },
-      { key = "haptic", page = "alerts", label = "Vibration", shared = true,
-        type = "bool", default = D.haptic },
-      { key = "hapticStrength", page = "alerts", label = "Strength", shared = true,
-        type = "choice", choices = { 1, 2, 3 }, labels = { "Soft", "Normal", "Strong" },
-        default = D.hapticStrength },
+        default = D.rqlyThreshold, unit = "%" },
+      { key = "audio", page = "alerts", shared = true, type = "bool", default = D.audio },
+      { key = "haptic", page = "alerts", shared = true, type = "bool", default = D.haptic },
+      { key = "hapticStrength", page = "alerts", shared = true,
+        type = "choice", choices = { 1, 2, 3 }, default = D.hapticStrength },
+      { key = "language", page = "display", shared = true,
+        type = "choice", choices = core.LANGUAGES, default = D.language },
     },
 
     -- Rows on the Alerts page, in core.SOUND_KEYS order
-    sounds = {
-      stage1 = { label = "Link quality low", hint = "Signal close to the limit" },
-      stage2 = { label = "Link quality critical", hint = "Signal at the limit and link quality low" },
-      lost   = { label = "Link lost", hint = "Link gone in flight (off by default)" },
-      conn   = { label = "Link connected", hint = "Link up for a new flight (off by default)" },
-      rec    = { label = "Link recovered", hint = "Link back after a loss in flight (off by default)" },
-    },
+    sounds = {},
 
-    -- id never changes once released: other programs recognise a reset by it, not by its label
     resets = {
-      { id = "settings", label = "Reset settings", ask = "Reset Link Sentinel settings to factory defaults?",
-        run = core.resetSettings },
+      { id = "settings", run = core.resetSettings },
     },
   }
+
+  -- The texts, in the shape the settings tool reads: a file as { label, path },
+  -- a field's label, hint (%v: its value) and labels of its choices.
+  for _, p in ipairs(man.paths) do p[1], p[2] = T("files", p.id) or p.id, p.path end
+  for _, f in ipairs(man.fields) do
+    f.label = T("fields", f.key, "label") or f.key
+    local hint = T("fields", f.key, "hint")
+    if hint then f.hint = string.gsub(hint, "{v}", "%%v") end
+    if f.choices then
+      f.labels = {}
+      for i, c in ipairs(f.choices) do f.labels[i] = T("fields", f.key, "choices", c) or tostring(c) end
+    end
+  end
+  for _, key in ipairs(core.SOUND_KEYS) do
+    man.sounds[key] = { label = T("sounds", key, "label") or key, hint = T("sounds", key, "hint") }
+  end
+  for _, r in ipairs(man.resets) do
+    r.label = T("resets", r.id, "label") or r.id
+    r.ask, r.desc = T("resets", r.id, "ask"), T("resets", r.id, "desc")
+  end
+  return man
 end

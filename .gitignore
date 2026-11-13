@@ -18,21 +18,14 @@ Desktop.ini
 *.swo
 *~
 
-# Claude Code
-CLAUDE.md
-.claude
-
-# Folder
-context/
-tests/
-
 # Secrets
 .env
 .env.local
 .env.*.local
 *.pem
 *.key
-secrets.json.venv/
+secrets.json
+.venv/
 
 # Edgetx simulator
 src/MODELS
@@ -40,4 +33,10 @@ src/RADIO
 
 # Runtime data
 config.lua
-CHANGELOG.md
+
+# Claude Code: personal settings stay local
+.claude/settings.local.json
+.claude/*.lock
+
+# Third-party code kept only as a reference (see context/references.md)
+context/references/

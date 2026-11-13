@@ -134,8 +134,17 @@ M.DEFAULTS = {
   audio          = M.PARAMS.AUDIO,
   haptic         = M.PARAMS.HAPTIC,
   hapticStrength = M.PARAMS.HAPTIC_STRENGTH,
+  language       = "en",
 }
 local DEFAULTS = M.DEFAULTS
+
+-- Languages of the settings tool's texts (/SCRIPTS/SNTNL/lang/<code>.lua); the
+-- widget and the announcements are English only.
+M.LANGUAGES = { "en", "de" }
+local function languageOr(v, fallback)
+  for _, code in ipairs(M.LANGUAGES) do if v == code then return v end end
+  return fallback
+end
 
 -- Clamp helper: n into [lo, hi]; non-numbers fall back to `fallback`.
 local function clampNum(n, lo, hi, fallback)
@@ -193,6 +202,7 @@ function M.normalizeConfig(cfg)
   out.haptic         = boolOr(out.haptic, DEFAULTS.haptic)
   out.hapticStrength = clampNum(out.hapticStrength,
                          L.hapticStrength.min, L.hapticStrength.max, DEFAULTS.hapticStrength)
+  out.language       = languageOr(out.language, DEFAULTS.language)
   local snd, sounds = (type(out.sounds) == "table") and out.sounds or {}, {}
   for k, v in pairs(snd) do sounds[k] = v end
   for _, k in ipairs(M.SOUND_KEYS) do
@@ -323,12 +333,13 @@ function M.defaultConfig()
   return cfg
 end
 
--- Settings back to factory values. The shared settings (audio, haptic) are kept: they
--- are set once for all scripts in the settings tool. True on success.
+-- Settings back to factory values. The shared settings (audio, haptic, language) are
+-- kept: they are set once for all scripts in the settings tool. True on success.
 function M.resetSettings()
   local cfg = M.loadConfig() or M.defaultConfig()
   local fresh = M.defaultConfig()
   fresh.audio, fresh.haptic, fresh.hapticStrength = cfg.audio, cfg.haptic, cfg.hapticStrength
+  fresh.language   = cfg.language
   fresh.generation = cfg.generation
   return M.saveConfig(fresh)
 end
@@ -665,22 +676,72 @@ function M.rssiAtRef(rss, tpwr)
   return rss - 10 * math.log(tpwr / M.REF_MW, 10)
 end
 
--- Setup errors that need no telemetry, one text each (the settings tool lists
--- them; a widget only shows that there is one): mandatory sensors not
--- discovered in the model. state as kept by update; without it a fresh one.
+-- Setup problems that need no telemetry, as { id = ..., <values> } (the settings
+-- tool lists them; a widget only shows that there is one): mandatory sensors not
+-- discovered in the model. An id never changes once released. state as kept by
+-- update; without it a fresh one.
 local MANDATORY = { "rssi1", "rqly", "rfmd" }
-function M.setupErrors(state)
+function M.setupIssues(state)
   state = state or M.newState()
   local has = sensorsPresent(state, M.SENSORS, nowMs(), SENSOR_CHECK_MS)
   local out = {}
-  if M.configDamaged then out[1] = "Settings file damaged" end   -- defaults in use
+  if M.configDamaged then out[1] = { id = "damaged" } end   -- defaults in use
   local missing = {}
   for _, k in ipairs(MANDATORY) do
     if not has[k] then missing[#missing + 1] = M.SENSORS[k] end
   end
   if #missing > 0 then
-    out[#out + 1] = "Missing sensors: " .. table.concat(missing, ", ")
-    out[#out + 1] = "Check sensors config"
+    out[#out + 1] = { id = "missingSensors", sensors = table.concat(missing, ", ") }
+    out[#out + 1] = { id = "checkSensors" }
+  end
+  return out
+end
+
+-- Texts of one language: T(area, id [, part [, key]]) gives the text, or nil. A
+-- text missing in that language comes from English, loaded when first needed.
+local LANG_DIR = "/SCRIPTS/SNTNL/lang/"
+local langEn
+local function loadLang(code)
+  local chunk = loadScript(LANG_DIR .. code .. ".lua")
+  local ok, t = false, nil
+  if chunk then ok, t = pcall(chunk) end
+  return ok and type(t) == "table" and t or {}
+end
+local function dig(t, a, b, c, d)
+  for _, k in ipairs({ a, b, c, d }) do
+    if type(t) ~= "table" then return nil end
+    t = t[k]
+  end
+  return t
+end
+function M.texts(code)
+  code = languageOr(code, "en")
+  local own = code ~= "en" and loadLang(code) or nil
+  return function(a, b, c, d)
+    local v = own and dig(own, a, b, c, d)
+    if v == nil then
+      langEn = langEn or loadLang("en")
+      v = dig(langEn, a, b, c, d)
+    end
+    return v
+  end
+end
+
+-- A text with its {name} placeholders filled from `values`.
+function M.fillText(s, values)
+  return (string.gsub(s, "{(%w+)}", function(k)
+    local v = values and values[k]
+    if v ~= nil then return tostring(v) end
+  end))
+end
+
+-- The setup problems as English sentences (the widgets show these); the texts
+-- are only loaded while there is a problem.
+function M.setupErrors(state)
+  local issues, out = M.setupIssues(state), {}
+  if #issues > 0 then
+    local T = M.texts("en")
+    for i, e in ipairs(issues) do out[i] = M.fillText(T("setup", e.id) or e.id, e) end
   end
   return out
 end
