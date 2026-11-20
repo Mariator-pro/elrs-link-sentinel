@@ -18,10 +18,11 @@ local A = {}
 A.BASE      = "/SCRIPTS/FLIGHTBAG/"
 -- Interface version of this file and the page logic (*_model.lua) for programs that run them
 -- outside the radio, such as a computer app: { breaking, additive }.
-A.API       = { 1, 0 }
+A.API       = { 1, 1 }
 local API_MAJOR = 1          -- core interface the tools understand: { 1, >= 0 }
 local HEAD_MAX  = 2048       -- VERSION, API and CONFIG_PATH sit within this many bytes
 local FIRST     = "WINGMAN"  -- listed first
+local hasWingman = false     -- Wingman is installed (set by A.scan)
 
 -- Topic pages. `needs`: the page shows while one of these apps is installed;
 -- `only` limits the page to them (otherwise every app takes part). `fields`:
@@ -136,7 +137,8 @@ local function removeLeftover(folder)
 end
 
 -- Apps sorted by folder, Wingman first: { folder, base, version, configPath,
--- hasManifest, name, ok, apiMinor, noConfig, icon (Bitmap), iconPath }.
+-- hasManifest, name, ok, apiMinor, noConfig, icon (Bitmap), iconPath }; once
+-- loaded also off ("wingman" or "unused" when the active model does not use it).
 function A.scan()
   local list = {}
   pcall(function()
@@ -162,6 +164,8 @@ function A.scan()
       end
     end
   end)
+  hasWingman = false
+  for _, app in ipairs(list) do if app.folder == FIRST then hasWingman = true end end
   table.sort(list, function(x, y)
     if (x.folder == FIRST) ~= (y.folder == FIRST) then return x.folder == FIRST end
     return x.folder < y.folder
@@ -196,6 +200,105 @@ end
 -- Loading an app (core, manifest, config) for a page or the popup
 -- ---------------------------------------------------------------------------
 
+-- Whether the active model uses an app: its widget (the manifest's `widget`,
+-- the name EdgeTX stores) on one of the model's screens, one of its function
+-- scripts (`scripts`) switched on in the model or in the radio's global
+-- functions, or Wingman's widget on the model with the app's module on. An app
+-- the model does not use gets app.off: "wingman" (module off there) or
+-- "unused"; its problems with this model's setup are none then. EdgeTX has no
+-- Lua call for the widgets, so the model file is read; a change reaches the
+-- card a few seconds later. Unknown (no manifest entry, unreadable model file,
+-- Wingman installed but not loadable): no app.off.
+local MODEL_ISSUES = { missingSensors = true, checkSensors = true, modelNotSetUp = true,
+                       noBatteries = true, noCellMatch = true }
+local CHUNK = 1024
+
+-- Calls fn with each line of a text file; false when it cannot be opened.
+local function eachLine(path, fn)
+  local ok, f = pcall(io.open, path, "r")
+  if not ok or not f then return false end
+  local rest = ""
+  while true do
+    local rok, s = pcall(io.read, f, CHUNK)
+    if not rok or not s or s == "" then break end
+    rest = rest .. s
+    local from = 1
+    while true do
+      local nl = string.find(rest, "\n", from, true)
+      if not nl then break end
+      fn(string.sub(rest, from, nl - 1))
+      from = nl + 1
+    end
+    rest = string.sub(rest, from)
+  end
+  pcall(io.close, f)
+  if rest ~= "" then fn(rest) end
+  return true
+end
+
+-- Widget names and switched-on function scripts of a model or radio file
+-- (special function entries list swtch, func, def in this order; def of a
+-- script is "<name>,<on 0/1>,<repeat>", without the flag it counts as on).
+local function readUse(path, use)
+  local script = false
+  return eachLine(path, function(l)
+    local w = string.match(l, "^%s*widgetName:%s*(.-)%s*$")
+    if w then
+      use.widgets[string.match(w, '^"(.*)"$') or w] = true
+      return
+    end
+    if string.match(l, "^%s*func:") then
+      script = string.match(l, "^%s*func:%s*PLAY_SCRIPT%s*$") ~= nil
+      return
+    end
+    local d = script and string.match(l, "^%s*def:%s*\"?([^\"]*)")
+    if d then
+      local name = string.match(d, "^([^,]*)")
+      if name ~= "" and string.match(d, "^[^,]*,(%d)") ~= "0" then use.scripts[name] = true end
+      script = false
+    end
+  end)
+end
+
+local use        -- of the active model: { widgets, scripts } (sets), false when unknown
+local wingman    -- Wingman's widget on the model, and its module switch by app folder
+local function modelUse()
+  if use == nil then
+    local file, u = A.activeModel(), { widgets = {}, scripts = {} }
+    use = file ~= nil and readUse("/MODELS/" .. file, u) and u
+    if use then readUse("/RADIO/radio.yml", use) end
+  end
+  return use or nil
+end
+
+local function readWingman(core, cfg, man)
+  local u = modelUse()
+  wingman = { here = u ~= nil and type(man.widget) == "string" and u.widgets[man.widget] == true, on = {} }
+  if type(core.modules) ~= "function" or type(core.CORES) ~= "table" then return end
+  local ok, on = pcall(core.modules, cfg, A.activeModel())
+  if not ok or type(on) ~= "table" then return end
+  for name, c in pairs(core.CORES) do
+    local folder = type(c) == "table" and type(c.path) == "string" and string.match(c.path, "^/SCRIPTS/([^/]+)/")
+    if folder then wingman.on[folder] = on[name] ~= false end
+  end
+end
+
+local function offState(app, man)
+  local u = modelUse()
+  if not u or type(man.widget) ~= "string" then return nil end
+  if u.widgets[man.widget] then return nil end
+  for _, s in ipairs(type(man.scripts) == "table" and man.scripts or {}) do
+    if u.scripts[s] then return nil end
+  end
+  if app.folder ~= FIRST and hasWingman and not wingman then return nil end   -- Wingman not loadable
+  if app.folder ~= FIRST and wingman and wingman.here then
+    local on = wingman.on[app.folder]
+    if on then return nil end
+    if on == false then return "wingman" end
+  end
+  return "unused"
+end
+
 -- The pages an app has fields on (a set), known from its last load; an app
 -- not loaded yet is loaded once for it.
 function A.fieldPages(app)
@@ -223,6 +326,8 @@ function A.load(app)
   if core.loadConfig then
     app.cfg, app.err, app.errDetail = core.loadConfig()
   end
+  if app.folder == FIRST then readWingman(core, app.cfg, man) end
+  app.off = offState(app, man)   -- kept past the unload
   -- Kept past the unload: the app's language setting and its pages with fields.
   app.language = app.cfg and app.cfg.language or nil
   app.pages = {}
@@ -232,8 +337,14 @@ function A.load(app)
   -- an older core. app.warn (the warning sign) outlives the unload.
   app.setupErrs, app.setupIssues = nil, nil
   if type(core.setupIssues) == "function" and type(core.texts) == "function" then
-    local sok, list = pcall(core.setupIssues)
-    if sok and type(list) == "table" and #list > 0 then
+    local sok, all = pcall(core.setupIssues)
+    local list = {}
+    if sok and type(all) == "table" then
+      for _, e in ipairs(all) do
+        if not (app.off and type(e) == "table" and MODEL_ISSUES[e.id]) then list[#list + 1] = e end
+      end
+    end
+    if #list > 0 then
       local T = core.texts(A.lang)
       app.setupIssues, app.setupErrs = list, {}
       for i, e in ipairs(list) do app.setupErrs[i] = core.fillText(T("setup", e.id) or e.id, e) end
@@ -282,6 +393,13 @@ end
 -- App popup: About data, file list and resets
 -- ---------------------------------------------------------------------------
 
+-- Why the app's icon is grey (app.off), or nil.
+function A.offText(app)
+  if app.off == "wingman" then return A.t("popup", "offInWingman") end
+  if app.off then return A.t("popup", "notUsed") end
+  return nil
+end
+
 -- Popup text: { text, warn } per line; the first line is the title.
 function A.popupLines(app)
   local lines = {}
@@ -291,6 +409,8 @@ function A.popupLines(app)
   local man = app.man or {}
   add("(c) " .. (man.author or "Mariator-pro") .. "   " .. (man.license or "GPL-2.0"))
   if man.url then add(man.url) end
+  local off = A.offText(app)
+  if off then add(off) end
   if not app.ok or app.loadError then
     add(A.t("popup", "updateNeeded"), true)
   elseif app.noConfig then

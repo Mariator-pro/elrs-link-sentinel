@@ -752,7 +752,7 @@ end
 function M.readSnapshot(state, now)
   local S   = M.SENSORS
   local has = sensorsPresent(state, S, now, SENSOR_CHECK_MS)
-  return {
+  local snap = {
     rssiValid = linkUp(),                    -- telemetry present at all
     has1RSS   = has.rssi1,                   -- mandatory-sensor existence
     hasRQly   = has.rqly,
@@ -766,6 +766,10 @@ function M.readSnapshot(state, now)
     fm        = readPresent(has, S, "fm"),   -- string sensor
     rsnr      = readPresent(has, S, "rsnr"), -- uplink SNR in dB, for scripts that load the core
   }
+  -- Link up before AND after the reads: a link that drops in between returns 0
+  -- for every sensor (LQ 0 in the extremes, FM 0 reads as disarmed).
+  snap.rssiValid = snap.rssiValid and linkUp()
+  return snap
 end
 
 -- ---------------------------------------------------------------------------

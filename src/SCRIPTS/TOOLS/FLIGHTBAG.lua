@@ -262,6 +262,8 @@ local function drawStrip()
       lcd.drawText(ix + math.floor((s - lw) / 2), iy + math.floor((s - lh) / 2), letter,
                    COLOR_THEME_PRIMARY2 + BOLD)
     end
+    -- Not used by the active model: icon faded into the background.
+    if app.off then lcd.drawFilledRectangle(ix, iy, s, s, COLOR_THEME_SECONDARY3, 5) end
     if A.needsSign(app) then drawMarker(ix + s - 2, iy + 2, s) end
     local ty = iy + s + FOCUS_PAD
     for _, t in ipairs({ app.name or app.folder, app.version and ("v" .. app.version) or "?" }) do

@@ -48,6 +48,7 @@ return {
     updateNeeded = "Update needed: this version does not work with this Flight Bag.",
     noConfig = "No settings file yet",
     damaged = "Settings file damaged ({detail}).",
+    offInWingman = "Off for this model in Wingman", notUsed = "Not used on this model",
     files = "Files", create = "Create", reset = "Recreate",
     resetAsk = "Replace the damaged settings file with a new one? Its content is lost.",
   },

@@ -42,6 +42,7 @@ return {
     updateNeeded = "Update nötig: Diese Version läuft nicht mit diesem Flight Bag.",
     noConfig = "Noch keine Einstellungsdatei",
     damaged = "Einstellungsdatei beschädigt ({detail}).",
+    offInWingman = "Für dieses Modell in Wingman deaktiviert", notUsed = "Von diesem Modell nicht genutzt",
     files = "Dateien", create = "Anlegen", reset = "Neu anlegen",
     resetAsk = "Die beschädigte Einstellungsdatei durch eine neue ersetzen? Ihr Inhalt geht verloren.",
   },

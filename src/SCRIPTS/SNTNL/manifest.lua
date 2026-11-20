@@ -18,6 +18,8 @@ return function(core, lang)
     author  = "Mariator-pro",
     license = "GPL-2.0",
     url     = "github.com/Mariator-pro/elrs-link-sentinel",
+    widget  = "Sentinel",   -- widget name as EdgeTX stores it in the model file
+    scripts = { "sntnl" },   -- function scripts in /SCRIPTS/FUNCTIONS/
     -- ids never change once released: other programs recognise an entry by it
     paths = {
       { id = "core",   path = "/SCRIPTS/SNTNL/core.lua" },
