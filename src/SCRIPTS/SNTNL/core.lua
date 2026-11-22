@@ -767,8 +767,11 @@ function M.readSnapshot(state, now)
     rsnr      = readPresent(has, S, "rsnr"), -- uplink SNR in dB, for scripts that load the core
   }
   -- Link up before AND after the reads: a link that drops in between returns 0
-  -- for every sensor (LQ 0 in the extremes, FM 0 reads as disarmed).
+  -- for every sensor (LQ 0 in the extremes, FM 0 reads as disarmed). Right after
+  -- the link comes up, RQly and 1RSS can still read 0 although getRSSI is up:
+  -- such a sample counts as no link too.
   snap.rssiValid = snap.rssiValid and linkUp()
+  if snap.hasRQly and not (snap.rqly and snap.rqly > 0) then snap.rssiValid = false end
   return snap
 end
 
