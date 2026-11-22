@@ -3,7 +3,7 @@
 -- =====================================================================
 -- SD card path: /SCRIPTS/FLIGHTBAG/models_model.lua
 -- Model list, the edited model (cells, parallel packs, battery assignment,
--- sensor mapping, Wingman's module switches), the steps of saving and
+-- sensor mapping, Wingman's module switches and own display settings), the steps of saving and
 -- deleting, and the model's "SD Logs" special function. Used by both Flight
 -- Bag tools (models.lua, LVGL/models.lua).
 -- =====================================================================
@@ -56,6 +56,17 @@ return function(ctx)
   local wcore = wapp and wapp.core
   local wcfg  = wapp and wapp.cfg   -- nil: Wingman missing or its file damaged
   local DEFAULT_SENSORS = core and core.DEFAULT_SENSORS
+  -- Wingman's display settings a model may have of its own (page style, bar
+  -- style), as the fields of its manifest (label, choices, labels); none with a
+  -- Wingman core without modelSetting.
+  local OWN, OWN_KEYS = {}, {}
+  if wcfg and wcore.modelSetting and wcore.setModelSetting then
+    for _, key in ipairs(wcore.MODEL_SETTINGS or {}) do
+      for _, f in ipairs(wapp.man and wapp.man.fields or {}) do
+        if f.key == key then OWN[key] = f; OWN_KEYS[#OWN_KEYS + 1] = key end
+      end
+    end
+  end
 
   local M = {
     SENSOR_FIELDS = SENSOR_FIELDS,
@@ -63,7 +74,8 @@ return function(ctx)
     LIMITS = core and core.LIMITS,
     -- Lipo Nanny installed but its file unusable: the page only says so.
     broken = app ~= nil and cfg == nil,
-    model = nil,   -- the edited model: { filename, cells, parallel, batteryIds, sensors, mods }
+    model = nil,   -- the edited model: { filename, cells, parallel, batteryIds, sensors, mods, own }
+    OWN_KEYS = OWN_KEYS,   -- rows of "Show in Wingman" below the modules (own display settings)
   }
   local orig, inLipo   -- the model as opened; it had a Lipo Nanny entry
 
@@ -141,9 +153,11 @@ return function(ctx)
     for _, id in ipairs(m.batteryIds or {}) do mod.batteryIds[#mod.batteryIds + 1] = id end
     for _, f in ipairs(SENSOR_FIELDS) do mod.sensors[f.key] = (m.sensors or {})[f.key] end
     if wcfg then mod.mods = wcore.modules(wcfg, key) end
+    mod.own = {}   -- own display settings; nil: the one for all models
+    for _, k in ipairs(OWN_KEYS) do mod.own[k] = wcore.modelSetting(wcfg, key, k) end
     M.model, M.isActive = mod, key == active
     orig = { cells = mod.cells, parallel = mod.parallel, batteryIds = {}, sensors = {},
-             mods = mod.mods and copyMods(mod.mods) }
+             mods = mod.mods and copyMods(mod.mods), own = copyMods(mod.own) }
     for _, id in ipairs(mod.batteryIds) do orig.batteryIds[#orig.batteryIds + 1] = id end
     for _, f in ipairs(SENSOR_FIELDS) do orig.sensors[f.key] = mod.sensors[f.key] end
   end
@@ -175,6 +189,7 @@ return function(ctx)
   local function modsDirty()
     if not M.model.mods then return false end
     for k, v in pairs(M.model.mods) do if orig.mods[k] ~= v then return true end end
+    for _, k in ipairs(OWN_KEYS) do if M.model.own[k] ~= orig.own[k] then return true end end
     return false
   end
 
@@ -194,13 +209,42 @@ return function(ctx)
     return false
   end
 
-  -- The switched-on modules: "Battery, Link, GPS", "Battery, Link", "None".
+  -- Rows of the own display settings: label, the value shown, the choices
+  -- (first: the one for all models, id false) and the help naming that one.
+  local function choiceLabel(f, v)
+    for i, c in ipairs(f.choices) do if c == v then return f.labels[i] end end
+    return f.labels[1]
+  end
+  function M.ownTitle(k) return OWN[k].label end
+  function M.ownText(k)
+    local v = M.model.own[k]
+    return v and choiceLabel(OWN[k], v) or lib.t("models", "ownGlobal")
+  end
+  function M.ownChoices(k)
+    local f = OWN[k]
+    local labels, ids = { lib.t("models", "ownGlobal") }, { false }
+    for i, c in ipairs(f.choices) do labels[i + 1], ids[i + 1] = f.labels[i], c end
+    local cur = 1
+    for i, id in ipairs(ids) do if id == (M.model.own[k] or false) then cur = i end end
+    return labels, cur, ids
+  end
+  function M.setOwn(k, id) M.model.own[k] = id or nil end
+  function M.ownHint(k) return lib.t("models", "ownHint", { v = choiceLabel(OWN[k], wcfg[k]) }) end
+
+  -- The switched-on modules: "Battery, Link, GPS", "Battery, Link", "None";
+  -- the model's own display settings in brackets: "Battery, Link, GPS (Horizon, Zones)".
   function M.modsText()
     local on = {}
     for _, k in ipairs(wcore.MODULES) do
       if M.model.mods[k] then on[#on + 1] = MODULES[k].label end
     end
-    return #on > 0 and table.concat(on, ", ") or lib.t("models", "none")
+    local own = {}
+    for _, k in ipairs(OWN_KEYS) do
+      if M.model.own[k] then own[#own + 1] = choiceLabel(OWN[k], M.model.own[k]) end
+    end
+    local text = #on > 0 and table.concat(on, ", ") or lib.t("models", "none")
+    if #own > 0 then text = lib.t("models", "ownList", { mods = text, own = table.concat(own, ", ") }) end
+    return text
   end
 
   -- ---------------------------------------------------------------------------
@@ -266,7 +310,10 @@ return function(ctx)
     local m = M.model
     local lipo = cfg ~= nil and (inLipo or lipoDirty() or not m.mods or m.mods.lipo)
     local wing = modsDirty()
-    if wing then wcore.setModules(wcfg, m.filename, m.mods) end
+    if wing then
+      wcore.setModules(wcfg, m.filename, m.mods)
+      for _, k in ipairs(OWN_KEYS) do wcore.setModelSetting(wcfg, m.filename, k, m.own[k]) end
+    end
     if not lipo then return false, wing end
     local entry = { cells = m.cells, parallel = m.parallel, batteryIds = m.batteryIds }
     -- Only sensors that differ from the CRSF default are stored.

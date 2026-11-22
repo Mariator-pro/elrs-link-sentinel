@@ -57,6 +57,9 @@ return {
     link = { label = "Verbindung", hint = "Verbindungs-Spalte und Ansagen von Link Sentinel" },
     gps  = { label = "GPS", hint = "GPS-Spalte, Suchseite und Ansagen von GPS Homer" },
     none = "Keine",
+    ownGlobal = "Global",
+    ownList = "{mods} ({own})",
+    ownHint = "Global: wie unter Anzeige eingestellt ({v}). Oder eine Wahl nur für dieses Modell.",
   },
 
   ui = {

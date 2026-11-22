@@ -64,6 +64,9 @@ return {
     link = { label = "Link", hint = "Link column and alerts of Link Sentinel" },
     gps  = { label = "GPS", hint = "GPS column, search page and alerts of GPS Homer" },
     none = "None",
+    ownGlobal = "Global",
+    ownList = "{mods} ({own})",
+    ownHint = "Global: as set under Display ({v}). Or a choice only for this model.",
   },
 
   -- Flight Bag's own pages on the radio (internal ids)

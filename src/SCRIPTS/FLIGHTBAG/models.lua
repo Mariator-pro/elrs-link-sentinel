@@ -323,27 +323,39 @@ return function(ctx)
   end
 
   -- ---------------------------------------------------------------------------
-  -- Screen: Show in Wingman (module switches On/Off), stored with the model's Save
+  -- Screen: Show in Wingman (module switches On/Off, then the model's own
+  -- display settings), stored with the model's Save
   -- ---------------------------------------------------------------------------
 
   local function leaveModules() S.screen, S.modelCursor = "model", M.rowIndex("modules") end
 
   function Screen.drawModules()
-    local keys = M.moduleKeys()
+    local keys, own = M.moduleKeys(), M.OWN_KEYS
+    local rows = #keys + #own
     ui.drawHeader(t("titleShowInWingman", { name = M.name(M.model.filename) }))
     for i, k in ipairs(keys) do
       ui.drawFieldRow(i, MODULES[k].label, lib.t("rows", M.model.mods[k] and "on" or "off"), { selected = S.modsCursor == i })
     end
-    drawHelp(MODULES[keys[math.min(S.modsCursor, #keys)]].hint)
-    ui.drawButtonBar(labels({ "back" }), #keys + 1, S.modsCursor)
+    for i, k in ipairs(own) do
+      local row = #keys + i
+      ui.drawFieldRow(row, M.ownTitle(k), M.ownText(k), { selected = S.modsCursor == row, popup = true })
+    end
+    local c = math.min(S.modsCursor, rows)
+    drawHelp(keys[c] and MODULES[keys[c]].hint or M.ownHint(own[c - #keys]))
+    ui.drawButtonBar(labels({ "back" }), rows + 1, S.modsCursor)
   end
 
   function Screen.handleModules(e)
-    local keys = M.moduleKeys()
-    S.modsCursor = ui.moveCursor(S.modsCursor, e, #keys + 1)
+    local keys, own = M.moduleKeys(), M.OWN_KEYS
+    S.modsCursor = ui.moveCursor(S.modsCursor, e, #keys + #own + 1)
     if isEnter(e) then
-      local k = keys[S.modsCursor]
-      if k then M.model.mods[k] = not M.model.mods[k] else leaveModules() end
+      local c = S.modsCursor
+      local k, ok = keys[c], own[c - #keys]
+      if k then M.model.mods[k] = not M.model.mods[k]
+      elseif ok then
+        local choices, cur, ids = M.ownChoices(ok)
+        ui.openPicker(M.ownTitle(ok), choices, cur, function(i) M.setOwn(ok, ids[i]) end)
+      else leaveModules() end
     elseif isExit(e) then
       leaveModules()
     end
